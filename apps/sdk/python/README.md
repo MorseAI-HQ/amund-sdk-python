@@ -1,0 +1,301 @@
+# Morse Python SDK
+
+Unified observability for AI agents and infrastructure. One SDK.
+
+## Install
+
+```bash
+pip install morse-ai
+```
+
+With an adapter (installs the underlying provider SDK too):
+
+```bash
+pip install "morse-ai[anthropic]"
+pip install "morse-ai[openai]"
+pip install "morse-ai[openai_agents]"
+pip install "morse-ai[langgraph]"     # also pulls langchain-core
+pip install "morse-ai[claude_agent_sdk]"
+pip install "morse-ai[all]"           # every adapter
+```
+
+The import name is `morse_ai` (underscore) regardless of which extra
+you install — `import morse_ai`.
+
+### Supported versions
+
+Python 3.11+. We verify two versions of each framework — the declared floor
+and the current latest. Versions between them are expected to work but are
+not verified; below the floor is unsupported. The `latest` half is still
+being built out (MHQ-930), so today only the floor is verified. Policy:
+`engineering/SDK_VERSION_SUPPORT.md`.
+
+The versions below are what CI installs and runs the adapter suite against
+— not the widest version we believe works.
+
+What is verified against the real installed package is the structural contract
+— every adapter monkey-patches a method on someone else's class
+(`Messages.create`, `Runner.run`, `ClaudeSDKClient.receive_response`, …), and
+`tests/contract/` asserts those targets still exist on every PR. Without it an
+upstream rename makes `install()` return `False` silently, and you get no
+telemetry and no error.
+
+Behavioural coverage is still mostly fixture-driven, so a green suite is weaker
+evidence than it looks; cross-version coverage is MHQ-930.
+
+| Framework          | Declared floor  | Tested in CI |
+| ------------------ | --------------- | ------------ |
+| `anthropic`        | `>=0.40.0`      | 0.86.0       |
+| `openai`           | `>=1.50.0`      | 2.29.0       |
+| `openai-agents`    | `>=0.15.0,<1.0` | 0.15.2       |
+| `langgraph`        | `>=1.0`         | 1.2.2        |
+| `langchain-core`   | `>=1.0`         | 1.4.0        |
+| `claude-agent-sdk` | `>=0.1.0`       | 0.2.130      |
+
+## Quick Start
+
+```python
+import morse_ai
+
+morse_ai.init(api_key="mhq_xxxxx")  # pragma: allowlist secret
+
+morse_ai.record(
+    agent="lead-qualifier",
+    success=True,
+    outcome="qualified",
+    cost=0.043,
+)
+```
+
+Or trace a multi-step run:
+
+```python
+with morse_ai.run("lead-qualifier") as r:
+    with morse_ai.span("fetch-lead", "tool"):
+        ...
+    r.set_outcome(True, "qualified")
+```
+
+`record()`/`run()`/`span()`/`@trace_agent` all send real OpenTelemetry
+spans over OTLP by default — see [Transport](#transport) below.
+
+## Zero-config instrumentation
+
+```bash
+pip install "morse-ai[anthropic]"
+export MORSE_API_KEY=mhq_xxxxx
+# your existing anthropic / openai-agents / langgraph / claude-agent-sdk
+# code is now traced — no morse_ai.wrap() calls anywhere
+```
+
+When the SDK initializes, it scans `sys.modules` for installed
+provider SDKs — and registers an import hook for ones imported later —
+and calls each detected adapter's `install()`. Today that covers
+`anthropic`, `openai-agents` (imports as `agents`), `langgraph`, and
+`claude-agent-sdk`. Priority rule: when both LangGraph and generic
+LangChain are importable, only the LangGraph adapter installs, to
+avoid duplicate spans. Opt out entirely with
+`MORSE_DISABLE_AUTO_DETECT=1`; you can still call any adapter's
+`install()`/`wrap()` directly.
+
+The plain LangChain adapter (`MorseCallbackHandler`, for chains
+outside a LangGraph graph) is **not** auto-installed — pass it via
+`callbacks=[...]` explicitly (see below).
+
+## Adapters
+
+### Anthropic
+
+```python
+from morse_ai.adapters import anthropic as av_anthropic
+import anthropic
+
+client = av_anthropic.wrap(anthropic.Anthropic())
+# every messages.create call now emits an `llm` span automatically
+response = client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Qualify this lead..."}],
+)
+```
+
+`wrap()` is idempotent and works whether or not auto-detect already
+installed the adapter globally. Pass `summarize=True` (or use the
+`summarize()` context manager per-call) to also emit a sibling
+`memory` span.
+
+### OpenAI
+
+```python
+from morse_ai.adapters import openai as av_openai
+import openai
+
+client = av_openai.wrap(openai.OpenAI())
+response = client.chat.completions.create(
+    model="gpt-4.1",
+    messages=[{"role": "user", "content": "Qualify this lead..."}],
+)
+```
+
+Context segments (messages + tools) are captured automatically on
+every call — no separate extraction step.
+
+### OpenAI Agents SDK, LangGraph, Claude Agent SDK
+
+These three are auto-installed globally by zero-config detection (see
+above) — no wrap call needed once the package is importable and
+`MORSE_API_KEY` is set. To install manually (e.g. to control ordering,
+or with auto-detect disabled):
+
+```python
+from morse_ai.adapters import openai_agents, langgraph, claude_agent_sdk
+
+openai_agents.install()      # patches agents.Runner.run / run_sync / run_streamed
+langgraph.install()          # registers a callback handler globally with LangChain
+claude_agent_sdk.install()   # patches ClaudeSDKClient.receive_response
+```
+
+Each emits an outer **agent** span, per-call **llm** + **tool** spans,
+and adapter-specific spans (LangGraph: nested chain spans; OpenAI
+Agents: **subagent.spawn**-shaped `handoff` spans; Claude Agent SDK:
+**subagent.spawn** spans for Task-tool fan-out and **hook** spans for
+`pre_tool`/`post_tool`/`on_error`).
+
+### Plain LangChain (chains, LLMs, tools, retrievers)
+
+Not auto-installed — attach `MorseCallbackHandler` via `callbacks`:
+
+```python
+from morse_ai.adapters.langchain import MorseCallbackHandler
+
+handler = MorseCallbackHandler("my-agent")
+chain = SomeChain(..., callbacks=[handler])
+```
+
+Called inside an existing `morse_ai.run()` context, the handler
+appends child spans to that trace. Called standalone (no enclosing
+`run()`), it auto-creates a trace that flushes when the outermost
+chain completes — no `morse_ai.run()` wrapper required.
+
+## Capturing logs alongside agent traces
+
+If you already use stdlib `logging` or `structlog`, you can ship every
+log line to Morse with one line of config. Each record is
+auto-correlated with the active trace (the one entered via
+`morse_ai.run()`, `@morse_ai.trace_agent`, or any active
+`morse_ai.span(...)`) and appears under the trace's **Logs** tab on
+the dashboard.
+
+The shim re-uses the SDK's batched transport — no blocking I/O on your
+hot path.
+
+### Stdlib `logging`
+
+```python
+import logging
+import morse_ai
+from morse_ai.logging import MorseHandler
+
+morse_ai.init(api_key="mhq_xxxxx")  # pragma: allowlist secret
+logging.basicConfig(level=logging.INFO, handlers=[MorseHandler()])
+```
+
+### `structlog`
+
+```python
+import structlog
+import morse_ai
+from morse_ai.logging import structlog_processor
+
+morse_ai.init(api_key="mhq_xxxxx")  # pragma: allowlist secret
+structlog.configure(processors=[structlog_processor, structlog.processors.JSONRenderer()])
+```
+
+Log lines emitted outside any trace context still flow to Morse — they
+just won't be correlated to a specific trace. Errors inside the
+handler / processor are absorbed and never propagate into your
+`logger.info(...)` call.
+
+## Cost
+
+`cost_usd` is computed automatically from the model + token counts on
+every `llm` span the adapters above emit, using a bundled pricing
+table — no separate call needed. `record()` doesn't auto-compute —
+pass `cost` yourself if you have it.
+
+## Transport
+
+`run()`/`span()`/`trace_agent`/`record()` emit real OpenTelemetry spans
+— `TracerProvider` / `BatchSpanProcessor` / `TraceIdRatioBased` sampler
+— over OTLP (protobuf+gzip). This is a **core dependency**
+(`opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`), not an
+optional extra — every install speaks OTLP. `track()`/`batch_track()`
+are a lower-level, non-trace-shaped escape hatch of their own — prefer
+`record()`.
+
+## PII Redaction
+
+The SDK ships with PII redaction **on by default**. Span attributes and
+event payloads are scrubbed inside your process before any data leaves
+for the Morse ingest endpoint. You can opt out per-pattern, opt out
+entirely, or extend the catalogue with your own regex.
+
+### What gets redacted by default
+
+| Pattern key         | Matches                                                                                                                                                                                                               | Replacement              |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `api_key_prefixed`  | `sk-…`, `sk_live_…`, `sk_test_…`, `mhq_…`, GitHub PATs (`ghp_…`/`gho_…`/…), Slack tokens (`xoxb-…`), AWS access keys (`AKIA…`/`ASIA…`/…)                                                                              | `[REDACTED:api_key]`     |
+| `jwt`               | Three-segment base64url tokens (`eyJ…`)                                                                                                                                                                               | `[REDACTED:jwt]`         |
+| `credit_card`       | 13-19 digit groups passing the Luhn checksum                                                                                                                                                                          | `[REDACTED:credit_card]` |
+| `email`             | RFC-5322-ish address regex                                                                                                                                                                                            | `[REDACTED:email]`       |
+| `phone_us`          | US-format phone numbers                                                                                                                                                                                               | `[REDACTED:phone]`       |
+| `phone_e164`        | International E.164 phone numbers                                                                                                                                                                                     | `[REDACTED:phone]`       |
+| `ssn_us`            | US Social Security numbers (`999-99-9999`)                                                                                                                                                                            | `[REDACTED:ssn]`         |
+| `ip_address`        | IPv4 / IPv6 — **disabled by default**, opt-in                                                                                                                                                                         | `[REDACTED:ip]`          |
+| `secret_assignment` | Key-context secret assignments: `password=`, `client_secret:`, `authorization: Bearer …`, `PGPASSWORD=` and similar. Excludes token _counts_ (`input_tokens=`, `max_tokens=`) — those are telemetry, not credentials. | `[REDACTED:secret]`      |
+
+### Configuring redaction
+
+```python
+import morse_ai
+
+morse_ai.init(
+    api_key="mhq_xxxxx",  # pragma: allowlist secret
+    # All four kwargs below are optional; defaults are shown.
+    redaction_enabled=True,
+    redaction_disabled_patterns=None,    # e.g. ["email", "phone_us"]
+    redaction_extra_patterns=None,       # e.g. [r"INTERNAL-\w+"]
+)
+```
+
+- `redaction_enabled=False` turns OFF every built-in pattern at the SDK
+  layer. **The server-side mandatory floor still applies** —
+  `api_key_prefixed`, `jwt`, `credit_card`, and `ssn_us` are rewritten
+  on ingest regardless of SDK configuration. Opting out shifts _where_
+  redaction happens, it does not remove it.
+- `redaction_disabled_patterns` lets you skip individual non-mandatory
+  keys (`email`, `phone_us`, `phone_e164`, `ip_address`). Trying to
+  disable a mandatory pattern raises `ValueError` at `init()`.
+- `redaction_extra_patterns` accepts up to 10 customer regex strings
+  (each ≤ 256 chars). Each must compile via `re.compile()`; matches are
+  replaced with `[REDACTED:custom]`. Built-in patterns run before extra
+  patterns, so a custom regex sees the already-redacted text.
+
+### What is NOT touched
+
+Non-string leaves (numbers, booleans, `None`, opaque objects) pass
+through untouched. Span IDs, timestamps, durations, token counts, and
+other metadata are never redacted.
+
+## Docs
+
+Full reference — every adapter, all `init()` options, configuration,
+troubleshooting — lives at **[docs.morsehq.dev](https://docs.morsehq.dev)**.
+This README stays a quickstart.
+
+## Naming
+
+The PyPI project is `morse-ai`; the import name is `morse_ai`
+(Python's underscore convention). The npm package for the TypeScript
+SDK is `@morsehq-dev/sdk` — see that package's README for why it
+doesn't match this one's naming.

@@ -1,0 +1,100 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "morse-ai"
+version = "0.7.0"
+description = "Unified observability for AI agents and infrastructure. One SDK."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11,<4.0"
+authors = [{ name = "Morse", email = "hello@morsehq.dev" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "httpx>=0.25.0,<1.0",
+    # MHQ-668 — transport rebuilt on the OTel SDK: real TracerProvider /
+    # BatchSpanProcessor / TraceIdRatioBased sampler, OTLP protobuf+gzip
+    # export. Core deps (not an optional extra) — every install now speaks
+    # OTLP for run()/span()/trace_agent.
+    "opentelemetry-sdk>=1.27.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.27.0",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40.0"]
+openai = ["openai>=1.50.0"]
+openai_agents = ["openai-agents>=0.15.0,<1.0"]
+langchain = ["langchain-core>=1.0"]
+langgraph = ["langgraph>=1.0", "langchain-core>=1.0"]
+# MHQ-928 — the claude_agent_sdk adapter (src/morse_ai/adapters/claude_agent_sdk.py)
+# has shipped and auto-installed since 2026-06-22 with no extra declaring it and
+# the package never installed in CI: its tests use hand-written mock classes,
+# because the adapter classifies content blocks by type(x).__name__. Floor is
+# 0.1.0 to match the TS SDK's peer range. NOT yet exercised against the real
+# package in CI — MHQ-930 adds the canary lane that would prove this floor.
+claude_agent_sdk = ["claude-agent-sdk>=0.1.0"]
+all = [
+    "anthropic>=0.40.0",
+    "openai>=1.50.0",
+    "openai-agents>=0.15.0,<1.0",
+    "langgraph>=1.0",
+    "langchain-core>=1.0",
+    "claude-agent-sdk>=0.1.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "respx>=0.22",
+    "pytest-benchmark>=5.0",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    # INFRACAP-07: queue_capture tests exercise the real libraries.
+    "celery>=5.3",
+    "boto3>=1.34",
+]
+
+[project.urls]
+Homepage = "https://morsehq.dev"
+Documentation = "https://docs.morsehq.dev"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/morse_ai"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "TCH"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests as requiring a live backend (run with: pytest -m integration)",
+    "req: spec requirement traceability marker",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "pytest>=9.0.2",
+    "respx>=0.22.0",
+    "ruff>=0.15.7",
+]
