@@ -1,0 +1,145 @@
+{
+  "chromadb": {
+    "category": "vector_store",
+    "adapters": [
+      {
+        "version_range": ">=0.3,<0.5",
+        "id": "chroma_v4",
+        "status": "full",
+        "detection": "http",
+        "endpoint_patterns": ["/api/v1/collections"]
+      },
+      {
+        "version_range": ">=0.5",
+        "id": "chroma_v5",
+        "status": "full",
+        "detection": "http",
+        "endpoint_patterns": ["/api/v2/tenants"]
+      }
+    ]
+  },
+  "pinecone": {
+    "category": "vector_store",
+    "adapters": [
+      {
+        "version_range": ">=3.0",
+        "id": "pinecone_v3",
+        "status": "full",
+        "detection": "http"
+      },
+      {
+        "version_range": ">=2.0,<3.0",
+        "id": "pinecone_v2",
+        "status": "partial",
+        "detection": "http",
+        "note": "HTTP-level only, no structured retrieval metadata"
+      }
+    ]
+  },
+  "weaviate-client": {
+    "category": "vector_store",
+    "adapters": [
+      {
+        "version_range": ">=4.0",
+        "id": "weaviate_v4",
+        "status": "full",
+        "detection": "http"
+      }
+    ]
+  },
+  "qdrant-client": {
+    "category": "vector_store",
+    "adapters": [
+      {
+        "version_range": ">=1.0",
+        "id": "qdrant_v1",
+        "status": "full",
+        "detection": "http"
+      }
+    ]
+  },
+  "mem0ai": {
+    "category": "memory_framework",
+    "adapters": [
+      {
+        "version_range": ">=1.0",
+        "id": "mem0_cloud",
+        "status": "full",
+        "detection": "import",
+        "hook_points": ["Memory.add", "Memory.search"]
+      }
+    ]
+  },
+  "mem0": {
+    "category": "memory_framework",
+    "adapters": [
+      {
+        "version_range": ">=1.0",
+        "id": "mem0_oss",
+        "status": "full",
+        "detection": "import",
+        "hook_points": ["Memory.add", "Memory.search"]
+      }
+    ]
+  },
+  "langgraph": {
+    "category": "agent_framework",
+    "adapters": [
+      {
+        "version_range": ">=0.2",
+        "id": "langgraph_v2",
+        "status": "full",
+        "detection": "import",
+        "hook_points": ["StateGraph.compile", "checkpointer.put", "checkpointer.get"]
+      }
+    ]
+  },
+  "langchain": {
+    "category": "agent_framework",
+    "adapters": [
+      {
+        "version_range": ">=0.1",
+        "id": "langchain_v1",
+        "status": "full",
+        "detection": "import",
+        "hook_points": ["BaseCallbackHandler"]
+      }
+    ]
+  },
+  "openai": {
+    "category": "llm_sdk",
+    "adapters": [
+      {
+        "version_range": ">=1.0",
+        "id": "openai_v1",
+        "status": "full",
+        "detection": "import",
+        "hook_points": ["chat.completions.create"]
+      }
+    ]
+  },
+  "anthropic": {
+    "category": "llm_sdk",
+    "adapters": [
+      {
+        "version_range": ">=0.20",
+        "id": "anthropic_v1",
+        "status": "full",
+        "detection": "import",
+        "hook_points": ["messages.create"]
+      }
+    ]
+  },
+  "pgvector": {
+    "category": "vector_store",
+    "adapters": [
+      {
+        "version_range": ">=0.2",
+        "id": "pgvector_v1",
+        "status": "partial",
+        "detection": "import",
+        "note": "SQL-level tracing; no query metadata"
+      }
+    ]
+  }
+}
