@@ -1,0 +1,187 @@
+name: Release — Python SDK (morse-ai)
+
+# MHQ-65 — tag-triggered release pipeline for the Python SDK.
+# See engineering/SDK_PUBLISHING.md §5 for the full design writeup.
+#
+# Trigger: push a tag matching sdk-python-v*. That push is the actual "go"
+# action — nothing here runs on develop/main pushes.
+#
+# ⚠️ THAT TAG PUSH IS THE ONLY GATE. This comment used to claim publishing was
+# "gated a second time by the `pypi-release` GitHub Environment's required
+# reviewer (stable channel only)". There is no such gate and there never was
+# (MHQ-849). All release environments carry ZERO protection rules — verified
+# 2026-08-08 by trying to add one: GitHub returns 422 for BOTH required
+# reviewers and a plain wait timer on this repo.
+#
+# Do not "fix" that by upgrading the plan. The org already reports `team` and
+# the 422 persists, so this is not a tier the environments can be bought out
+# of. See SDK_PUBLISHING.md §0.3.
+#
+# Nothing pauses a stable tag push, and PyPI/npm version numbers can never be
+# reused — so the discipline is convention: a release tag needs the founder's
+# explicit go-ahead in the current session, same as any prod action.
+#
+# Uses PyPI Trusted Publishing (OIDC) — no PYPI_API_TOKEN secret. Requires
+# the one-time pending-publisher config described in SDK_PUBLISHING.md §0.1.
+
+on:
+  push:
+    tags:
+      - "sdk-python-v*"
+
+  # Manual trigger — REQUIRED ESCAPE HATCH, not a convenience.
+  #
+  # This repo demonstrably drops tag-triggered runs. On 2026-08-06 the rc4 tags
+  # produced no run at all on first push; a delete-and-re-push produced only the
+  # TypeScript run (which then hit a concurrency cancellation), and the Python
+  # tag produced no run across two separate pushes. `ci.yml` carries the same
+  # note from 2026-07-29, when GitHub stopped creating push/pull_request runs
+  # entirely while workflow_dispatch kept working.
+  #
+  # Without this, a dropped event is a dead end: the only recourse is deleting
+  # and re-pushing a release tag and hoping, which is a poor thing to do to a
+  # tag that has already been published against.
+  #
+  # HOW TO USE: dispatch this workflow **with the release tag selected as the
+  # ref**, not a branch. Both the version assertion and the channel selection
+  # read `GITHUB_REF_NAME`, so on a tag ref they behave exactly as they do for a
+  # tag push — same version, same channel, same publish. Dispatching from a
+  # branch would leave `GITHUB_REF_NAME` as the branch name and the version
+  # assertion would fail loudly rather than publish something wrong.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  WORKING_DIR: apps/sdk/python
+
+jobs:
+  determine-channel:
+    name: Determine release channel
+    runs-on: ubicloud-standard-2
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      channel: ${{ steps.version.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag and pyproject.toml, assert match
+        id: version
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#sdk-python-v}"
+          FILE_VERSION="$(grep -m1 '^version = ' pyproject.toml | sed -E 's/version = "(.*)"/\1/')"
+
+          if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match pyproject.toml version ($FILE_VERSION) at this commit. Bump and commit the version before tagging."
+            exit 1
+          fi
+
+          # PEP 440 pre-release/dev markers -> preview channel.
+          if echo "$FILE_VERSION" | grep -qE '(dev|rc|a|b)[0-9]*$'; then
+            CHANNEL="preview"
+          else
+            CHANNEL="stable"
+          fi
+
+          echo "version=$FILE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "Releasing morse-ai $FILE_VERSION on the $CHANNEL channel"
+
+  build-and-test:
+    name: Build + test
+    needs: determine-channel
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        working-directory: ${{ env.WORKING_DIR }}
+        run: uv sync --all-extras --dev
+
+      - name: Test
+        working-directory: ${{ env.WORKING_DIR }}
+        # -m "not integration" excludes tests/test_integration.py, which needs
+        # a live Morse backend + MORSE_API_KEY (see that file's own docstring)
+        # — not available on this runner. Nothing else in the suite needs it.
+        run: uv run pytest -m "not integration"
+
+      - name: Lint
+        working-directory: ${{ env.WORKING_DIR }}
+        run: uv run ruff check .
+
+      - name: Type-check (advisory — not a release blocker)
+        # mypy on the SDK has never been an enforced gate anywhere (only
+        # apps/api's mypy is enforced, in advisory.yml) — 136 pre-existing
+        # errors across 18 files surfaced the first time this was actually
+        # run (2026-07-28, MHQ-753). Non-blocking here until that backlog is
+        # cleared; flip continue-on-error off once it's clean.
+        working-directory: ${{ env.WORKING_DIR }}
+        continue-on-error: true
+        run: uv run mypy src/morse_ai
+
+      - name: Build distribution
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          rm -rf dist/
+          uv build
+
+      - name: Validate package metadata
+        working-directory: ${{ env.WORKING_DIR }}
+        run: uv tool run twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: ${{ env.WORKING_DIR }}/dist/
+          retention-days: 7
+
+  publish-testpypi:
+    name: TestPyPI smoke test
+    # No `environment:` here — TestPyPI is a pre-flight check, not the real
+    # customer-facing registry, so it doesn't need to bind an environment at
+    # all. (There is no reviewer gate on the ones that do — MHQ-849.) Its
+    # PyPI Trusted Publisher config (SDK_PUBLISHING.md §0.1) can be left
+    # unscoped to any GitHub environment.
+    needs: [determine-channel, build-and-test]
+    runs-on: ubicloud-standard-2
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/
+          skip-existing: true
+
+  publish-pypi:
+    name: Publish to PyPI (${{ needs.determine-channel.outputs.channel }})
+    needs: [determine-channel, publish-testpypi]
+    runs-on: ubicloud-standard-2
+    environment:
+      name: ${{ needs.determine-channel.outputs.channel == 'stable' && 'pypi-release' || 'pypi-release-preview' }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

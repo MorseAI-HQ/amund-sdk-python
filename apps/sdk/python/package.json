@@ -1,0 +1,12 @@
+{
+  "name": "@morse_ai/sdk-python",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "uv run pytest tests/ -v",
+    "lint": "uv run ruff check src/ tests/",
+    "build": "uv run python -m build",
+    "type-check": "uv run mypy src/",
+    "clean": "rm -rf dist/ build/ *.egg-info src/*.egg-info"
+  }
+}
