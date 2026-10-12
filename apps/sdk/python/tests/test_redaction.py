@@ -476,16 +476,8 @@ def test_init_rejects_uncompilable_extra_pattern() -> None:
 # ---------------------------------------------------------------------------
 
 
-# Repo layout: apps/sdk/python/tests/test_redaction.py → repo root is parents[4].
-_CORPUS_PATH = (
-    Path(__file__).resolve().parents[4]
-    / "openspec"
-    / "changes"
-    / "archive"
-    / "2026-05-07-phase-6f-g02-pii-redaction"
-    / "tests"
-    / "parity_corpus.json"
-)
+# Keep the shared parity fixture inside the independent SDK repository.
+_CORPUS_PATH = Path(__file__).parent / "fixtures" / "parity_corpus.json"
 
 
 def _load_corpus() -> list[dict[str, object]]:
