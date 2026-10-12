@@ -1,3 +1,6 @@
+# Standalone template: copy to .github/workflows/release-python.yml.
+# Rebind registry trusted publishers to this repository before enabling Actions.
+# Release tag pushes/dispatches require founder approval of the reviewed release.
 name: Release — Python SDK (morse-ai)
 
 # MHQ-65 — tag-triggered release pipeline for the Python SDK.
@@ -59,7 +62,7 @@ env:
 jobs:
   determine-channel:
     name: Determine release channel
-    runs-on: ubicloud-standard-2
+    runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
       channel: ${{ steps.version.outputs.channel }}
@@ -92,7 +95,7 @@ jobs:
   build-and-test:
     name: Build + test
     needs: determine-channel
-    runs-on: ubicloud-standard-2
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -104,7 +107,7 @@ jobs:
 
       - name: Install
         working-directory: ${{ env.WORKING_DIR }}
-        run: uv sync --all-extras --dev
+        run: uv sync --frozen --all-extras --dev
 
       - name: Test
         working-directory: ${{ env.WORKING_DIR }}
@@ -151,7 +154,7 @@ jobs:
     # PyPI Trusted Publisher config (SDK_PUBLISHING.md §0.1) can be left
     # unscoped to any GitHub environment.
     needs: [determine-channel, build-and-test]
-    runs-on: ubicloud-standard-2
+    runs-on: ubuntu-latest
     permissions:
       id-token: write
     steps:
@@ -170,7 +173,7 @@ jobs:
   publish-pypi:
     name: Publish to PyPI (${{ needs.determine-channel.outputs.channel }})
     needs: [determine-channel, publish-testpypi]
-    runs-on: ubicloud-standard-2
+    runs-on: ubuntu-latest
     environment:
       name: ${{ needs.determine-channel.outputs.channel == 'stable' && 'pypi-release' || 'pypi-release-preview' }}
     permissions:

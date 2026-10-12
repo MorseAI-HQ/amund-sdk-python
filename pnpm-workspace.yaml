@@ -1,4 +1,1 @@
-packages:
-  - "apps/*"
-  - "apps/sdk/*"
-  - "packages/*"
+packages: []
