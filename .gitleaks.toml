@@ -10,7 +10,7 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 regexTarget = "secret"
 paths = ["^apps/sdk/python/tests/test_infra_pii_audit\\.py$"]
-regexes = ["^tok_canary_9f3a7c$"]
+regexes = ["^tok_canary_9f3a7c$"] # pragma: allowlist secret (reviewed synthetic fixture values only)
 
 [[allowlists]]
 description = "Owner-reviewed synthetic fixture or code identifier"
@@ -18,7 +18,7 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 regexTarget = "secret"
 paths = ["^apps/sdk/python/tests/test_v2_api\\.py$"]
-regexes = ["^av_test_1234567890$"]
+regexes = ["^av_test_1234567890$"] # pragma: allowlist secret (reviewed synthetic fixture values only)
 
 [[allowlists]]
 description = "Owner-reviewed synthetic fixture or code identifier"
@@ -26,7 +26,7 @@ targetRules = ["github-pat"]
 condition = "AND"
 regexTarget = "secret"
 paths = ["^apps/sdk/python/tests/fixtures/parity_corpus\\.json$"]
-regexes = ["^ghp_1234567890abcdef1234567890abcdef1234$"]
+regexes = ["^ghp_1234567890abcdef1234567890abcdef1234$"] # pragma: allowlist secret (reviewed synthetic fixture values only)
 
 [[allowlists]]
 description = "Owner-reviewed synthetic fixture or code identifier"
@@ -34,7 +34,7 @@ targetRules = ["jwt"]
 condition = "AND"
 regexTarget = "secret"
 paths = ["^apps/sdk/python/tests/fixtures/parity_corpus\\.json$"]
-regexes = ["^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\\.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkphbmUgRG9lIn0\\.xCJVoSi1q19SPSk7kKb6kYP8yU3yz7sLcG5bbqJyU2Q$"]
+regexes = ["^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\\.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkphbmUgRG9lIn0\\.xCJVoSi1q19SPSk7kKb6kYP8yU3yz7sLcG5bbqJyU2Q$"] # pragma: allowlist secret (reviewed synthetic fixture values only)
 
 [[allowlists]]
 description = "Owner-reviewed synthetic fixture or code identifier"
@@ -42,7 +42,7 @@ targetRules = ["slack-bot-token"]
 condition = "AND"
 regexTarget = "secret"
 paths = ["^apps/sdk/python/tests/fixtures/parity_corpus\\.json$"]
-regexes = ["^xoxb-1234567890-1234567890-AbCdEfGhIjKlMnOpQrStUvWx$"]
+regexes = ["^xoxb-1234567890-1234567890-AbCdEfGhIjKlMnOpQrStUvWx$"] # pragma: allowlist secret (reviewed synthetic fixture values only)
 
 [[allowlists]]
 description = "Owner-reviewed synthetic fixture or code identifier"
@@ -50,7 +50,7 @@ targetRules = ["stripe-access-token"]
 condition = "AND"
 regexTarget = "secret"
 paths = ["^apps/sdk/python/tests/fixtures/parity_corpus\\.json$"]
-regexes = ["^sk_live_51AbCdEfGhIjKlMnOpQrStUvWx$", "^sk_test_51AbCdEfGhIjKlMnOpQrStUvWx$"]
+regexes = ["^sk_live_51AbCdEfGhIjKlMnOpQrStUvWx$", "^sk_test_51AbCdEfGhIjKlMnOpQrStUvWx$"] # pragma: allowlist secret (reviewed synthetic fixture values only)
 
 [[allowlists]]
 description = "Owner-reviewed synthetic fixture or code identifier"
@@ -58,4 +58,187 @@ targetRules = ["stripe-access-token"]
 condition = "AND"
 regexTarget = "secret"
 paths = ["^apps/sdk/python/tests/test_redaction\\.py$"]
-regexes = ["^sk_live_51AbCdEfGhIjKlMnOpQrStUvWx$"]
+regexes = ["^sk_live_51AbCdEfGhIjKlMnOpQrStUvWx$"] # pragma: allowlist secret (reviewed synthetic fixture values only)
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^0ec1920095b93d8e51881528479fa9c3657af49a$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^10f49c2cb07649f38f2a0e282c0afd088d760ad3$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^1db372350aac7d5e55001deb6fb3009d100d1c6b$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^27234a8f444b2d28fd7893499f5a126384981cee$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^2879605ed9811a534562402852863d68151b73d7$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^37be9adc15cf15c06a57cb37f3b07f5d74afccc9$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^4cdd5b85de422ea2c4390b9da2527bb6bdd430fb$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^5fd31d2fe4a5ff9d9fa57087e1bfc2539e0297f7$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^665d722be0ef16d66d56197b6de8bb6ec8756a4c$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^6a76394b77568a09c41f407322463965465071d8$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^7877efac232bf6230d32054b123ff3fdd330fea0$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^a1eb2d963613c7e18d68874e21458f68a55d6410$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^ad7fa938b1a11e5c2921a154a06c1d9ff38444e3$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^afa5b0bba2ebc4619eb93ac9ae49575afe016d95$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^c2fd52eb53345d19be206645fe530d4ad49030be$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^cfa3cbbabd3431bba0ffa3312c87358187ffe1a3$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^cfbe3188714e4d0ea84364938aaf341655a79f56$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^d666dc7941ecc6dbe638000450c1bd6d943e8800$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^de30fb0f0ec542a7e02183b5e1a8feefed80a336$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^e7614a65fe32956a8a1f9e14a07f541db2766063$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^e90c6b26fe76a21c3e751f70b0746791a8a9866b$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^\\.secrets\\.baseline$"]
+regexes = ["^fd9a45bc0b07706d849cf85021ecf9123fa83d82$"]
+
+[[allowlists]]
+description = "Existing baseline hash or deliberate checker negative fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^scripts/check-inline-credentials\\.py$"]
+regexes = ["^h7Kd93ntQm2z$"]
