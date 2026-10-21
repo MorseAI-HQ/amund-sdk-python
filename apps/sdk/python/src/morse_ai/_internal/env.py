@@ -24,6 +24,11 @@ Env vars (all optional unless noted):
                                      Anomaly Investigator's signal. UNSET on
                                      customer integrations — absence of the
                                      attribute means "real customer traffic".
+- MORSE_GIT_REVISION          — (ATTR-06) explicit git revision for the deployed
+                                     build; outranks CI/platform variables and
+                                     ``git rev-parse``. For Docker images with
+                                     no ``.git``: ``ARG GIT_SHA`` then
+                                     ``ENV MORSE_GIT_REVISION=$GIT_SHA``.
 - MORSE_SAMPLE_RATE            — (MHQ-668/671) deterministic trace-ID head
                                      sampling rate in [0.0, 1.0], default 1.0
                                      (sample everything). Whole-trace: child
@@ -204,19 +209,29 @@ def is_legacy_transport() -> bool:
     return _truthy(os.environ.get("MORSE_LEGACY_TRANSPORT"))
 
 
-def get_git_revision() -> str | None:
-    """Auto-detect git commit SHA.
+# Detection order for the deployed git revision (ATTR-06). ``MORSE_GIT_REVISION``
+# is the explicit override a Docker build injects (``ARG GIT_SHA`` ->
+# ``ENV MORSE_GIT_REVISION=$GIT_SHA``) when neither a CI variable nor a ``.git``
+# directory is present in the runtime image.
+_GIT_REVISION_ENV_VARS = (
+    "MORSE_GIT_REVISION",
+    "GITHUB_SHA",
+    "CI_COMMIT_SHA",
+    "RAILWAY_GIT_COMMIT_SHA",
+    "VERCEL_GIT_COMMIT_SHA",
+    "RENDER_GIT_COMMIT",
+    "SOURCE_VERSION",
+)
 
-    Priority: GitHub → GitLab → Railway → Vercel → Render → subprocess.
+
+def get_git_revision() -> str | None:
+    """Auto-detect git commit SHA. Never raises.
+
+    Priority: ``MORSE_GIT_REVISION`` -> GitHub -> GitLab -> Railway -> Vercel ->
+    Render -> Heroku (``SOURCE_VERSION``) -> ``git rev-parse HEAD``.
     Returns None silently if no source is available.
     """
-    for var in (
-        "GITHUB_SHA",
-        "CI_COMMIT_SHA",
-        "RAILWAY_GIT_COMMIT_SHA",
-        "VERCEL_GIT_COMMIT_SHA",
-        "RENDER_GIT_COMMIT",
-    ):
+    for var in _GIT_REVISION_ENV_VARS:
         value = os.environ.get(var, "").strip()
         if value:
             return value
@@ -231,6 +246,32 @@ def get_git_revision() -> str | None:
         )
         if result.returncode == 0:
             return result.stdout.strip() or None
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+_MAX_SERVICE_VERSION = 128
+
+
+def get_service_version() -> str | None:
+    """``service.version`` from ``OTEL_RESOURCE_ATTRIBUTES``, or None. Never raises.
+
+    The variable is a comma-separated list of ``key=value`` pairs whose values
+    are URL-decoded (OpenTelemetry spec). There is deliberately no ``init()``
+    parameter for this: a deploy that already sets the OTel variable needs no
+    code change. Values longer than 128 characters are truncated, matching the
+    server's column.
+    """
+    try:
+        from urllib.parse import unquote  # noqa: PLC0415
+
+        raw = os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "")
+        for pair in raw.split(","):
+            key, sep, val = pair.partition("=")
+            if sep and key.strip() == "service.version":
+                value = unquote(val.strip()).strip()
+                return value[:_MAX_SERVICE_VERSION] or None
     except Exception:  # noqa: BLE001
         pass
     return None

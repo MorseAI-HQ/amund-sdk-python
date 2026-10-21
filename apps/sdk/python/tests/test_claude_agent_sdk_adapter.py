@@ -524,7 +524,8 @@ def test_subagent_start_emits_named_agent_span_nested_under_task():
             )
         )
 
-        # Task completes — this must flush (finalize + append) the AGENT span.
+        # The wrapper Task's PostToolUse fires at *launch* (MHQ-1416); it must
+        # leave the AGENT span open. The turn's ResultMessage then flushes it.
         _asyncio.run(
             adapter._av_post_tool_use(
                 {
@@ -536,6 +537,10 @@ def test_subagent_start_emits_named_agent_span_nested_under_task():
                 task_tid,
                 None,
             )
+        )
+        assert agent_id in adapter._open_agent_spans
+        adapter._handle_task_lifecycle_message(
+            FakeResultMessage(), "ResultMessage", tracing._active_trace.get()
         )
 
     trace = tracing._get_last_trace()

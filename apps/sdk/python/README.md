@@ -177,6 +177,87 @@ appends child spans to that trace. Called standalone (no enclosing
 `run()`), it auto-creates a trace that flushes when the outermost
 chain completes — no `morse_ai.run()` wrapper required.
 
+## Linking runs to business records and versions
+
+Tell Morse which business record a run handled and which version of your
+agent produced it, so outcomes that arrive later (a ticket closed, a refund
+issued) land on the right run and a change can be compared with what came
+before.
+
+```python
+morse_ai.init(api_key="mhq_xxxxx", agent_version="2.4.1")  # pragma: allowlist secret
+
+with morse_ai.run(
+    "support-triage",
+    record_keys={"zendesk_ticket": 4812},   # known up front...
+    agent_version="2.5.0-rc1",              # ...overrides init() for this run
+):
+    morse_ai.link_record("order_id", "A-1009")   # ...or discovered mid-run
+    with morse_ai.span("classify", "llm"):
+        morse_ai.set_prompt("triage", version=7)  # pinned to this span
+    morse_ai.set_prompt("summarise")              # no version: prompts kept in code
+```
+
+- **Record keys.** `link_record(key_type, key_value)` and `run(record_keys={...})`
+  attach ids from your own systems. `key_type` is lower-cased and must match
+  `^[a-z0-9][a-z0-9_.-]{0,63}$`; values are strings or ints, 1-256 characters.
+  Up to 20 per run; a repeated `key_type` replaces its earlier value. Invalid
+  keys are dropped and logged at debug level, never raised.
+  **Use opaque ids, not personal data** such as email addresses.
+- **`agent_version`.** Your own label (max 128 characters). `init(agent_version=...)`
+  is the default for every run; `run(..., agent_version=...)` overrides it.
+- **`set_prompt(name, version=None)`.** Records which named prompt a run used.
+  Inside a `span()` the reference is pinned to that span. Up to 20 per run.
+  Over OTLP a span carries one reference, so if several are set on the same
+  span the last one wins there; the JSON path keeps them all.
+- **Git revision.** Detected automatically from `MORSE_GIT_REVISION`,
+  `GITHUB_SHA`, `CI_COMMIT_SHA`, `RAILWAY_GIT_COMMIT_SHA`,
+  `VERCEL_GIT_COMMIT_SHA`, `RENDER_GIT_COMMIT`, `SOURCE_VERSION`, then
+  `git rev-parse HEAD`, in that order. In a Docker image with no `.git`
+  directory, inject it at build time:
+
+  ```dockerfile
+  ARG GIT_SHA
+  ENV MORSE_GIT_REVISION=$GIT_SHA
+  ```
+
+  (`docker build --build-arg GIT_SHA=$(git rev-parse HEAD) .`)
+
+- **`service.version`.** If `OTEL_RESOURCE_ATTRIBUTES` contains
+  `service.version=...`, it is sent with every run. No code change needed.
+
+Outside an open trace, `link_record()` and `set_prompt()` do nothing.
+
+## Fetching hosted prompts
+
+```python
+import morse_ai
+
+prompt = morse_ai.get_prompt("triage")                      # label="production"
+prompt = morse_ai.get_prompt("triage", version=3)           # or pin a version
+same = morse_ai.get_prompt("triage", if_none_match=prompt.etag)
+if same.not_modified: ...                                   # 304, other fields are None
+prompt = morse_ai.get_prompt("triage", cache_ttl=60)        # optional in-memory cache
+```
+
+`get_prompt` is a thin GET: no retries, no fallback. Inside an open run it also links that run to
+the fetched prompt version (`link_source="fetch"`), so the trace shows which version ran; pass
+`link=False` to opt out. A cache hit links too, a 304 links via the SDK's own cached copy, and with
+no open run nothing happens. If you also call `set_prompt` for the same name, version and span, one
+reference is kept. It raises `PromptAccessError` (403, the key needs the
+`prompts:read` scope), `PromptNotFoundError` (404) and `PromptRateLimitError` (429, `.retry_after`);
+network failures raise `httpx`'s transport errors.
+
+We recommend caching in some form so Morse is not on your request hot path. You have three options:
+
+1. **Call the API directly** on every use (the default). Responses carry `Cache-Control: max-age=30`.
+2. **Use your own cache**, with a bundled fallback prompt if you want one.
+3. **Pass `cache_ttl`** (seconds) for a small process-local LRU. A fresh entry is returned without a
+   request; a stale one is revalidated with `If-None-Match` (a 304 refreshes it). Errors are never
+   masked by stale data, so keep your own fallback if you want one. `None` or `0` (the default)
+   uses no cache, and passing your own `if_none_match` bypasses it.
+   `configure_prompt_cache(max_entries=256)` sets the size and `clear_prompt_cache()` empties it.
+
 ## Capturing logs alongside agent traces
 
 If you already use stdlib `logging` or `structlog`, you can ship every

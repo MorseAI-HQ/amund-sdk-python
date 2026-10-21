@@ -12,6 +12,24 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 
+@pytest.fixture(autouse=True)
+def _dead_default_endpoint(request, monkeypatch):
+    """Point every test at a dead local endpoint unless it sets its own.
+
+    Without this, a bare `init()` with a fake key resolves to the production default
+    and the abandoned OTLP exporter threads (see
+    `_OtelEngine.reset_for_testing`) keep POSTing fake-key spans to prod.
+    Tests that assert on the default endpoint opt out with
+    `@pytest.mark.real_default_endpoint`; those keep the prod URL but lose
+    `init()`'s dependency-scan POST, the one request they would otherwise make.
+    """
+    if request.node.get_closest_marker("real_default_endpoint") is None:
+        monkeypatch.setenv("MORSE_ENDPOINT", "http://localhost:0")
+    else:
+        monkeypatch.delenv("MORSE_ENDPOINT", raising=False)
+        monkeypatch.setattr("morse_ai._flush_dependencies_async", lambda client: None)
+
+
 @pytest.fixture
 def anthropic_response():
     """Mock Anthropic Message response with usage data."""
@@ -73,3 +91,12 @@ def openai_responses_api():
             output_tokens_details=SimpleNamespace(reasoning_tokens=0),
         ),
     )
+
+
+@pytest.fixture
+def legacy_identity(monkeypatch):
+    """AID-09: pre-v2 naming and span shape (MORSE_AGENT_IDENTITY=legacy).
+
+    Used by tests that pin the old "every chain is an agent span" shape.
+    """
+    monkeypatch.setenv("MORSE_AGENT_IDENTITY", "legacy")

@@ -43,6 +43,7 @@ from typing import Any
 _PATTERN_SOURCES: dict[str, str] = {
     "api_key_prefixed": (
         r"\b(?:sk-[A-Za-z0-9_-]{20,}|sk_(?:live|test)_[A-Za-z0-9]{20,}|"
+        r"(?:mhq|av)_(?:pk_)?[\s\S]{0,48}_[A-Fa-f0-9]{64}|"
         r"mhq_[A-Za-z0-9]{20,}|av_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{36}|gho_[A-Za-z0-9]{36}|"
         r"ghu_[A-Za-z0-9]{36}|ghs_[A-Za-z0-9]{36}|ghr_[A-Za-z0-9]{36}|"
         r"xox[bopsa]-[0-9A-Za-z\-]{10,}|"

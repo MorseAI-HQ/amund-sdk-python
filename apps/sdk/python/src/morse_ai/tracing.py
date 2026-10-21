@@ -43,7 +43,19 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from morse_ai._internal.agent_name import resolve_agent_name
+from morse_ai._internal.agent_name import (
+    GUESSED_SOURCES,
+    SOURCE_FRAMEWORK,
+    SOURCE_RUN,
+    identity_legacy,
+    resolve_agent_identity,
+)
+from morse_ai._internal.attribution import (
+    add_prompt_ref,
+    add_record_key,
+    clean_agent_version,
+    clean_prompt_ref,
+)
 from morse_ai._internal.errors import absorb_errors
 from morse_ai._internal.redaction import DISABLED_CONFIG, RedactionConfig
 from morse_ai.spans import SpanData, SpanType
@@ -105,6 +117,20 @@ class _TraceState:
     # trace and need no global map.
     infra_counts: dict[str, int] = field(default_factory=dict)
     infra_summaries: dict[str, SpanData] = field(default_factory=dict)
+    # ATTR-01/04/06: attribution declared by the app. ``record_keys`` links the
+    # trace to business records ({"zendesk_ticket": "4812"}); ``agent_version``
+    # is the app's own version label (per-run value; the init() default fills
+    # the gap at build time); ``prompts`` are references to named prompts, each
+    # optionally pinned to the span that was open when set_prompt() was called.
+    record_keys: dict[str, str] = field(default_factory=dict)
+    agent_version: str | None = None
+    prompts: list[dict[str, Any]] = field(default_factory=list)
+    # AID-01/04: which ladder tier named the root agent, the ``run("app")`` label
+    # when a discovered framework root took the agent name (AID-04), and whether
+    # a framework root has already been adopted for this trace.
+    identity_source: str | None = None
+    app: str | None = None
+    root_adopted: bool = False
 
 
 # ContextVar is the correct tool here: async-safe, no thread-local race
@@ -159,6 +185,18 @@ _source: str | None = None
 # Git commit SHA detected at init time (env var or subprocess). Attached to
 # every trace as ``resource["git.revision"]`` for deployment-aware filtering.
 _git_revision: str | None = None
+
+# Declared agent version from ``init(agent_version=)``: the default for every
+# trace. A per-run ``run(..., agent_version=)`` overrides it.
+_agent_version: str | None = None
+
+# SETUP-10: ``init(capture_end_user=True)`` opt-in. Off by default: adapters
+# never read the provider's ``user`` / ``metadata.user_id`` unless this is set.
+_capture_end_user: bool = False
+
+# ``service.version`` from OTEL_RESOURCE_ATTRIBUTES, read once at init and sent
+# as ``resource["service.version"]`` (ATTR-06). No init parameter by design.
+_service_version: str | None = None
 
 # Last completed trace — stored for test assertions, replaced on each trace
 _last_trace: dict[str, Any] | None = None
@@ -265,6 +303,49 @@ def _set_git_revision(value: str | None) -> None:
     _git_revision = value
 
 
+def _set_agent_version(value: str | None) -> None:
+    """Inject the init-time default agent version. Called by `_Client.__init__`."""
+    global _agent_version
+    _agent_version = clean_agent_version(value)
+
+
+def _set_capture_end_user(value: bool) -> None:
+    """Inject the init-time end-user capture opt-in. Called by `_Client.__init__`."""
+    global _capture_end_user
+    _capture_end_user = bool(value)
+
+
+def hash_end_user(value: Any) -> str | None:
+    """``"h:" + sha256(value)[:32]``, or None for an empty / non-string value."""
+    if not isinstance(value, str) or not value:
+        return None
+    import hashlib  # noqa: PLC0415
+
+    return "h:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:32]
+
+
+def apply_end_user(state: Any, raw: Any) -> None:
+    """SETUP-10: set the trace ``user_id`` from a provider end-user value.
+
+    No-op unless ``init(capture_end_user=True)``. Only the hash is stored; the
+    raw value never leaves this function. An app-set ``user_id`` always wins.
+    ``customer_id`` is never touched.
+    """
+    if not _capture_end_user or state is None:
+        return
+    if getattr(state, "user_id", None) is not None:
+        return
+    hashed = hash_end_user(raw)
+    if hashed is not None:
+        state.user_id = hashed
+
+
+def _set_service_version(value: str | None) -> None:
+    """Inject ``service.version`` from the env. Called by `_Client.__init__`."""
+    global _service_version
+    _service_version = value
+
+
 def _get_transport() -> Any | None:
     return _transport
 
@@ -293,6 +374,47 @@ def exception_type_name(exc: BaseException | None) -> str | None:
         if module in ("builtins", "")
         else f"{module}.{cls.__qualname__}"
     )
+
+
+def _remove_from_stack(stack: list[SpanData], span: SpanData) -> None:
+    """Drop ``span`` from the shared stack by identity.
+
+    ``stack.pop()`` removes whichever span is on top, which under parallel
+    branches (LangGraph fan-out) is another branch's span: the stack then
+    carries a closed span and ends wrong for everything that follows (AID-05).
+    """
+    for i in range(len(stack) - 1, -1, -1):
+        if stack[i] is span:
+            del stack[i]
+            return
+
+
+def adopt_native_root(state: _TraceState | None, native_name: str | None) -> None:
+    """AID-01/AID-04: let a discovered framework root name the trace's agent.
+
+    A guessed name (service/entry script/default) yields to the framework root.
+    An explicit ``run("app")`` name is kept as the ``morse.app`` label and the
+    discovered root keeps the agent identity, so no second agent is forked.
+    Idempotent; a no-op under ``MORSE_AGENT_IDENTITY=legacy``.
+    """
+    if state is None or state.root_adopted or identity_legacy():
+        return
+    if not state.span_stack:
+        return
+    state.root_adopted = True
+    native = (native_name or "").strip()
+    if not native:
+        return
+    if native.lower() == (state.agent_name or "").lower():
+        return
+    source = state.identity_source or SOURCE_RUN
+    if source == SOURCE_RUN:
+        state.app = state.agent_name
+    elif source not in GUESSED_SOURCES:
+        return
+    state.agent_name = native
+    state.identity_source = SOURCE_FRAMEWORK
+    state.span_stack[0].name = native
 
 
 def _finalize_span(
@@ -345,6 +467,26 @@ def _build_trace_dict(
         trace_fields["user_id"] = state.user_id
     if getattr(state, "user_metadata", None):
         trace_fields["user_metadata"] = state.user_metadata
+    # ATTR-01/04: omitted when empty, so old servers and old traces see no change.
+    if getattr(state, "record_keys", None):
+        trace_fields["record_keys"] = dict(state.record_keys)
+    effective_agent_version = getattr(state, "agent_version", None) or _agent_version
+    if effective_agent_version:
+        trace_fields["agent_version"] = effective_agent_version
+    if getattr(state, "prompts", None):
+        trace_fields["prompts"] = [dict(p) for p in state.prompts]
+    # AID-01/04 wire keys the server reads from trace metadata.
+    if not identity_legacy():
+        identity_md = {
+            k: v
+            for k, v in (
+                ("identity_source", getattr(state, "identity_source", None)),
+                ("morse_app", getattr(state, "app", None)),
+            )
+            if v
+        }
+        if identity_md:
+            trace_fields["metadata"] = identity_md
 
     all_spans = [root_span] + list(state.completed_spans)
     entry: dict[str, Any] = {
@@ -374,6 +516,7 @@ def _build_trace_dict(
         effective_source is not None
         or effective_framework is not None
         or _git_revision is not None
+        or _service_version is not None
     ):
         # Resource-level attributes are per-process by spec, but we lift
         # them to the trace envelope so co-resident emitters (copilot +
@@ -386,6 +529,8 @@ def _build_trace_dict(
             resource["morse_ai.framework"] = effective_framework
         if _git_revision is not None:
             resource["git.revision"] = _git_revision
+        if _service_version is not None:
+            resource["service.version"] = _service_version
         entry["resource"] = resource
     return entry
 
@@ -477,6 +622,92 @@ def set_outcome(success: bool, outcome: str | None = None) -> None:
     state.outcome = outcome
 
 
+@absorb_errors(fingerprint="morse_ai.link_record")
+def link_record(key_type: str, key_value: str | int) -> None:
+    """Link the open trace to a business record, e.g. a ticket or an order.
+
+        morse_ai.link_record("zendesk_ticket", 4812)
+
+    Record keys let Morse attach outcomes that arrive later (a ticket closed,
+    a refund issued) to the trace that handled the record. Call it as many
+    times as you like: keys accumulate, and a repeated ``key_type`` replaces
+    its earlier value (the wire shape is ``{type: value}``).
+
+    ``key_type`` is lower-cased and must match ``^[a-z0-9][a-z0-9_.-]{0,63}$``.
+    ``key_value`` may be a string or an int; it is trimmed and must be 1-256
+    characters. Invalid keys are dropped (debug log, never an exception), and
+    at most 20 keys are kept per trace. Use opaque record ids, not personal
+    data such as email addresses.
+
+    Works the same inside ``with morse_ai.run(...)`` and ``@trace_agent``.
+    No-op (with a debug log) when no trace is open.
+    """
+    state = get_active_trace()
+    if state is None:
+        logger.debug("morse_ai: link_record() called with no open trace; ignored")
+        return
+    add_record_key(state.record_keys, key_type, key_value)
+
+
+@absorb_errors(fingerprint="morse_ai.set_prompt")
+def set_prompt(name: str, version: int | None = None) -> None:
+    """Record which named prompt (and optionally which version) this trace used.
+
+        morse_ai.set_prompt("triage", version=7)
+        morse_ai.set_prompt("triage")   # prompts kept in code: no version needed
+
+    Called inside an open ``morse_ai.span(...)``, the reference is pinned to
+    that span; called outside one, it belongs to the trace (the root span).
+    Teams that keep prompts in code need not invent version numbers: the
+    declared ``agent_version`` or the git revision identifies the change.
+
+    ``name`` must be 1-255 characters. ``version`` must be an int >= 1; any
+    other value is dropped and the name is kept. Invalid input is ignored
+    (debug log, never an exception). At most 20 references are kept per trace.
+
+    Wire behaviour. The JSON path carries every distinct reference. The OTLP
+    path carries one reference per span (``morse.prompt.name`` /
+    ``morse.prompt.version``): if several land on the same span, the LAST one
+    wins on that span, and none of them overwrites a different span's.
+    No-op (with a debug log) when no trace is open.
+    """
+    state = get_active_trace()
+    if state is None:
+        logger.debug("morse_ai: set_prompt() called with no open trace; ignored")
+        return
+    span_id: str | None = None
+    # span_stack[0] is the trace's root span; only a deeper entry is a span the
+    # caller opened, and only then is the span id worth pinning.
+    if len(state.span_stack) > 1:
+        span_id = state.span_stack[-1].span_id
+    ref = clean_prompt_ref(name, version, span_id)
+    if ref is not None:
+        add_prompt_ref(state.prompts, ref)
+
+
+def link_fetched_prompt(name: Any, version: Any) -> bool:
+    """Link the open run (if any) to a prompt fetched via ``get_prompt`` (UP-09).
+
+    Reads the active-run contextvar at call time. Returns True when a ref was
+    added or upgraded. Never raises.
+    """
+    try:
+        state = get_active_trace()
+        if state is None:
+            return False
+        span_id: str | None = None
+        if len(state.span_stack) > 1:
+            span_id = state.span_stack[-1].span_id
+        ref = clean_prompt_ref(name, version, span_id, link_source="fetch")
+        if ref is None:
+            return False
+        add_prompt_ref(state.prompts, ref)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("morse_ai: prompt fetch-link skipped: %s", exc)
+        return False
+
+
 def trace_agent(name_or_func=None):
     """Decorator that wraps a function in a trace with a root agent span.
 
@@ -495,7 +726,9 @@ def trace_agent(name_or_func=None):
             # Lazy auto-init — see _ensure_sdk_initialized() for rationale.
             _ensure_sdk_initialized()
             trace_id = uuid.uuid4().hex
-            state = _TraceState(trace_id=trace_id, agent_name=agent_name)
+            state = _TraceState(
+                trace_id=trace_id, agent_name=agent_name, identity_source=SOURCE_RUN
+            )
             # AGE-240: capture framework at trace open. Re-read at emit time
             # picks up any adapter that activates after we enter.
             from morse_ai._internal.active_framework import (
@@ -522,7 +755,7 @@ def trace_agent(name_or_func=None):
                 raise
             finally:
                 try:
-                    state.span_stack.pop()
+                    _remove_from_stack(state.span_stack, root_span)
                     if exc_val is not None:
                         _finalize_span(
                             root_span,
@@ -608,9 +841,11 @@ class TracedRun:
         thread_id: str | None = None,
         user_id: str | None = None,
         user_metadata: dict[str, str] | None = None,
+        record_keys: dict[str, str | int] | None = None,
+        agent_version: str | None = None,
     ) -> None:
         # MHQ-1100: None/empty resolves via convention at trace start.
-        self._agent_name = resolve_agent_name(agent_name)
+        self._agent_name, self._identity_source = resolve_agent_identity(agent_name)
         self._incoming_traceparent = incoming_traceparent
         # Per-trace resource-attr override — wins over the process-level
         # ``_source``. Only honoured when in the accepted whitelist; an
@@ -619,6 +854,8 @@ class TracedRun:
         self._thread_id = thread_id
         self._user_id = user_id
         self._user_metadata = user_metadata
+        self._record_keys = record_keys
+        self._agent_version = agent_version
         self._success: bool | None = None
         self._outcome: str | None = None
         self._error: str | None = None
@@ -668,6 +905,21 @@ class TracedRun:
         self._error = message
         self._success = False
 
+    def _apply_attribution(self, state: _TraceState) -> None:
+        """Seed ``record_keys`` / ``agent_version`` from the run() arguments.
+
+        Never raises: a malformed ``record_keys`` argument must not fail
+        trace start (the MHQ-947 failure mode).
+        """
+        try:
+            if self._record_keys:
+                for key_type, key_value in dict(self._record_keys).items():
+                    add_record_key(state.record_keys, key_type, key_value)
+            state.agent_version = clean_agent_version(self._agent_version)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("morse_ai: run() attribution swallowed error: %s", exc)
+            _report(exc, "morse_ai.tracing.run.attribution")
+
     def __enter__(self) -> "TracedRun":
         # Lazy auto-init — see _ensure_sdk_initialized() for rationale.
         # Without this, processes that only use the tracing API (refagents,
@@ -694,7 +946,11 @@ class TracedRun:
         if trace_id is None:
             trace_id = uuid.uuid4().hex
 
-        self._state = _TraceState(trace_id=trace_id, agent_name=self._agent_name)
+        self._state = _TraceState(
+            trace_id=trace_id,
+            agent_name=self._agent_name,
+            identity_source=self._identity_source,
+        )
         # AGE-240: capture the framework active at trace start (adapters
         # generally activate later via __enter__ on the wrapped call, but
         # callers may pre-mark e.g. with a manual ``set_active_framework``
@@ -712,6 +968,7 @@ class TracedRun:
             self._state.user_metadata = coerce_dims(
                 self._user_metadata, "morse_ai.tracing.run.user_metadata"
             )
+        self._apply_attribution(self._state)
         self._token = _active_trace.set(self._state)
 
         self._root_span = SpanData(
@@ -728,7 +985,7 @@ class TracedRun:
         assert self._root_span is not None
 
         try:
-            self._state.span_stack.pop()
+            _remove_from_stack(self._state.span_stack, self._root_span)
 
             if exc_type is not None:
                 error_msg = self._error or str(exc_val)
@@ -784,6 +1041,8 @@ def run(
     thread_id: str | None = None,
     user_id: str | None = None,
     user_metadata: dict[str, str] | None = None,
+    record_keys: dict[str, str | int] | None = None,
+    agent_version: str | None = None,
 ) -> TracedRun:
     """Create a TracedRun context manager for explicit trace control.
 
@@ -809,6 +1068,14 @@ def run(
             (e.g. ``customer_id``, ``feature``, ``env``, ``team``). All values
             are coerced to strings. Can also be set mid-trace via
             ``morse_ai.set_context(**dims)``.
+        record_keys: Business-record ids this trace handled, e.g.
+            ``{"zendesk_ticket": 4812}``. Same rules as
+            :func:`link_record` (invalid keys are dropped, max 20); more can be
+            added mid-trace with ``morse_ai.link_record(...)``. Use opaque ids,
+            not personal data.
+        agent_version: Your own label for the deployed agent version (max 128
+            chars). Overrides the ``init(agent_version=)`` default for this
+            trace.
 
     Example (multi-turn agent with thread attribution):
         with morse_ai.run(
@@ -826,6 +1093,8 @@ def run(
         thread_id=thread_id,
         user_id=user_id,
         user_metadata=user_metadata,
+        record_keys=record_keys,
+        agent_version=agent_version,
     )
 
 
@@ -938,9 +1207,16 @@ class TracedSpan:
     """
 
     def __init__(
-        self, name: str, span_type: str = "custom", input_data: Any | None = None
+        self,
+        name: str,
+        span_type: str = "custom",
+        input_data: Any | None = None,
+        parent_span_id: str | None = None,
     ) -> None:
         self._name = name
+        # AID-05: adapters that know the real parent (a callback's parent run)
+        # pass it; None falls back to the top of the shared stack.
+        self._parent_span_id = parent_span_id
         self._span_type = span_type
         self._input_data = input_data
         self._span: SpanData | None = None
@@ -1004,8 +1280,8 @@ class TracedSpan:
         self._active = True
 
         # Resolve parent: top of span_stack
-        parent_span_id: str | None = None
-        if state.span_stack:
+        parent_span_id: str | None = self._parent_span_id
+        if parent_span_id is None and state.span_stack:
             parent_span_id = state.span_stack[-1].span_id
 
         # Normalise span_type
@@ -1030,7 +1306,7 @@ class TracedSpan:
             return False
 
         try:
-            self._state.span_stack.pop()
+            _remove_from_stack(self._state.span_stack, self._span)
 
             if exc_type is not None:
                 _finalize_span(
@@ -1058,7 +1334,10 @@ class TracedSpan:
 
 
 def span(
-    name: str, span_type: str = "custom", input_data: Any | None = None
+    name: str,
+    span_type: str = "custom",
+    input_data: Any | None = None,
+    parent_span_id: str | None = None,
 ) -> TracedSpan:
     """Create a child span context manager under the current trace context.
 
@@ -1066,4 +1345,6 @@ def span(
     parameterized SQL statement for a ``db`` span). No-op when called outside
     an active trace.
     """
-    return TracedSpan(name, span_type, input_data=input_data)
+    return TracedSpan(
+        name, span_type, input_data=input_data, parent_span_id=parent_span_id
+    )

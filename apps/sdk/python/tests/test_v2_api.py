@@ -12,6 +12,8 @@ Verifies:
 
 # ruff: noqa: E501
 
+import pytest
+
 import morse_ai
 from morse_ai.client import _Client
 
@@ -146,6 +148,7 @@ def test_record_emits_v2_trace_not_runs():
     assert span.get("output_tokens") == 5
 
 
+@pytest.mark.real_default_endpoint
 def test_default_endpoint_is_railway_prod():
     """Phase 6c default endpoint is the Railway prod URL.
 

@@ -33,6 +33,11 @@ from morse_ai.adapters.langchain import (
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _legacy_shape(legacy_identity):
+    """These pin payload capture on the pre-v2 root-chain agent span."""
+
+
 def _chain_serialized(name: str = "Node") -> dict:
     return {"id": ["langgraph", "nodes", name], "name": name}
 

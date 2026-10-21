@@ -89,6 +89,7 @@ testpaths = ["tests"]
 markers = [
     "integration: marks tests as requiring a live backend (run with: pytest -m integration)",
     "req: spec requirement traceability marker",
+    "real_default_endpoint: opt out of the autouse dead MORSE_ENDPOINT (asserts on the production default)",
 ]
 
 [dependency-groups]

@@ -98,6 +98,7 @@ def test_disabled_makes_track_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.real_default_endpoint
 def test_init_logs_destination_url_once(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="morse_ai"):
         morse_ai.init(api_key="av_log_test")

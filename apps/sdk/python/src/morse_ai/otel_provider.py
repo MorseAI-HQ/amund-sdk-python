@@ -299,6 +299,12 @@ def _parse_retry_after(raw: Any) -> float | None:
     return seconds if 0 <= seconds <= 3600 else None
 
 
+# Bumped by `_OtelEngine.reset_for_testing()`. Exporters it abandons keep
+# retrying on daemon threads; a stale generation stops them recording drops
+# into the next test's process-global diagnostics counters.
+_exporter_generation = 0
+
+
 class _DropReportingOTLPSpanExporter(OTLPSpanExporter):
     """OTLP exporter that counts what it permanently discards (MHQ-1030).
 
@@ -326,6 +332,7 @@ class _DropReportingOTLPSpanExporter(OTLPSpanExporter):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self._generation = _exporter_generation
         # Thread-local: force_flush() can drive an export concurrently with the
         # BatchSpanProcessor's own worker, and two exports must not read each
         # other's status.
@@ -406,6 +413,8 @@ class _DropReportingOTLPSpanExporter(OTLPSpanExporter):
             if not self._wait_before_retry(delay):
                 break
 
+        if self._generation != _exporter_generation:
+            return result  # abandoned by reset_for_testing()
         try:
             from morse_ai._internal import diagnostics  # noqa: PLC0415
 
@@ -503,11 +512,19 @@ class _OtelEngine:
                 resource_attrs["morse.process.service_name"] = proc_service
             # Deploy markers: the JSON path already sends git.revision; the
             # OTel path (run()/span()/LangGraph) never did, so its traces had none.
-            from morse_ai._internal.env import get_git_revision
+            from morse_ai._internal.env import (
+                get_git_revision,
+                get_service_version,
+            )
 
             git_revision = get_git_revision()
             if git_revision:
                 resource_attrs["git.revision"] = git_revision
+            # ATTR-06: service.version from OTEL_RESOURCE_ATTRIBUTES, set
+            # explicitly so the JSON and OTLP paths agree on the value.
+            service_version = get_service_version()
+            if service_version:
+                resource_attrs["service.version"] = service_version
             resource = Resource.create(resource_attrs)
             provider = TracerProvider(sampler=sampler, resource=resource)
 
@@ -577,7 +594,9 @@ class _OtelEngine:
         ``shutdown()`` (genuine app exit) is untouched and still blocks
         properly so production telemetry gets a fair flush attempt.
         """
+        global _exporter_generation  # noqa: PLW0603
         with self._lock:
+            _exporter_generation += 1
             self.provider = None
             self.tracer = None
             self.recorder = None
@@ -661,6 +680,7 @@ def _span_dict_to_otel_attributes(
     *,
     is_root: bool,
     max_field_bytes: int,
+    prompt_ref: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     attrs: dict[str, Any] = {}
 
@@ -730,6 +750,12 @@ def _span_dict_to_otel_attributes(
         agent = trace_dict.get("agent")
         if agent:
             attrs["morse.agent"] = str(agent)
+        # AID-01/04: how the agent was named, and the run("app") label.
+        trace_md = trace_dict.get("metadata") or {}
+        if trace_md.get("identity_source"):
+            attrs["morse.identity_source"] = str(trace_md["identity_source"])
+        if trace_md.get("morse_app"):
+            attrs["morse.app"] = str(trace_md["morse_app"])
         thread_id = trace_dict.get("thread_id")
         if thread_id is not None:
             attrs["morse.thread_id"] = str(thread_id)
@@ -747,12 +773,30 @@ def _span_dict_to_otel_attributes(
         outcome = trace_dict.get("outcome")
         if outcome is not None:
             attrs["morse.outcome.label"] = str(outcome)
+        # ATTR-01/04: record keys and the declared agent version ride the root
+        # span; the server reads the first value it sees.
+        record_keys = trace_dict.get("record_keys")
+        if record_keys:
+            for key_type, key_value in record_keys.items():
+                attrs[f"morse.record_key.{key_type}"] = str(key_value)
+        agent_version = trace_dict.get("agent_version")
+        if agent_version:
+            attrs["morse.agent_version"] = str(agent_version)
         framework = resource_dict.get("morse_ai.framework")
         if framework:
             attrs["morse.framework"] = framework
         source = resource_dict.get("morse_ai.source")
         if source:
             attrs["morse.source"] = source
+
+    # ATTR-04: a prompt reference lives on the span set_prompt() was called in
+    # (the root span when it was called outside a span).
+    if prompt_ref:
+        attrs["morse.prompt.name"] = str(prompt_ref["name"])
+        if prompt_ref.get("version") is not None:
+            attrs["morse.prompt.version"] = int(prompt_ref["version"])
+        if prompt_ref.get("link_source") == "fetch":
+            attrs["morse.prompt.link_source"] = "fetch"
 
     exception_type = span_dict.get("exception_type")
     if exception_type and span_dict.get("status") == "failed":
@@ -765,6 +809,31 @@ def _span_dict_to_otel_attributes(
         attrs["morse.error_message"] = str(error_message)
 
     return attrs
+
+
+def _prompt_refs_by_span(
+    prompts: list[dict[str, Any]],
+    known_span_ids: set[Any],
+    root_span_id: str | None,
+) -> dict[str, dict[str, Any]]:
+    """Map span id -> the one prompt reference that span carries on OTLP.
+
+    A span has a single ``morse.prompt.name`` / ``.version`` pair, so when
+    several references were set on the same span the LAST one wins (the JSON
+    path keeps them all). A reference with no ``span_id``, or whose span was
+    never emitted, goes on the root span and competes there in call order
+    (still last wins).
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for ref in prompts:
+        if not isinstance(ref, dict) or not ref.get("name"):
+            continue
+        target = ref.get("span_id")
+        if target not in known_span_ids:
+            target = root_span_id
+        if target:
+            out[target] = ref
+    return out
 
 
 def emit_trace_entry(entry: dict[str, Any]) -> None:
@@ -817,11 +886,17 @@ def emit_trace_entry(entry: dict[str, Any]) -> None:
     if root_span_id is None and span_dicts:
         root_span_id = span_dicts[0].get("span_id")
 
-    # Root first, then children — so a child's parent SpanContext is always
-    # available by the time we process it (adapters emit flat lists where
-    # this already holds true in practice, but don't rely on ordering).
-    ordered = sorted(
-        span_dicts, key=lambda s: 0 if s.get("span_id") == root_span_id else 1
+    # Parents before children: a child's parent SpanContext must exist by the
+    # time we process it. MHQ-1412: completed spans arrive in COMPLETION order
+    # (a child ends before its parent), so the former root-first sort left
+    # nested spans without their parent context and OTel re-parented them onto
+    # the synthetic span_id=0x1 placeholder (stored as 0000...0001).
+    ordered = _parents_first(span_dicts, root_span_id)
+
+    prompt_by_span = _prompt_refs_by_span(
+        trace_dict.get("prompts") or [],
+        {s.get("span_id") for s in span_dicts},
+        root_span_id,
     )
 
     span_ctx_by_id: dict[str, SpanContext] = {}
@@ -842,6 +917,7 @@ def emit_trace_entry(entry: dict[str, Any]) -> None:
             resource_dict,
             is_root=(span_id_hex == root_span_id),
             max_field_bytes=max_field_bytes,
+            prompt_ref=prompt_by_span.get(span_id_hex),
         )
         start_ns = _iso_to_ns(span_dict.get("started_at"))
         end_ns = _iso_to_ns(span_dict.get("ended_at")) or start_ns
@@ -875,6 +951,36 @@ def emit_trace_entry(entry: dict[str, Any]) -> None:
         except Exception as exc:  # noqa: BLE001 — never break the host app
             logger.debug("morse_ai: OTel span emission swallowed error: %s", exc)
             _report(exc, "morse_ai.otel_provider.02")
+
+
+def _parents_first(span_dicts: list[dict], root_span_id: str | None) -> list[dict]:
+    """Order span dicts so every parent precedes its children (MHQ-1412).
+
+    Stable apart from hoisting parents ahead of their children. A parent that
+    is absent from the batch, or a cycle, falls through in input order.
+    """
+    by_id = {s.get("span_id"): s for s in span_dicts if s.get("span_id")}
+    ordered: list[dict] = []
+    placed: set[int] = set()
+
+    def place(span_dict: dict) -> None:
+        chain: list[dict] = []
+        cur: dict | None = span_dict
+        seen: set[int] = set()
+        while cur is not None and id(cur) not in placed and id(cur) not in seen:
+            seen.add(id(cur))
+            chain.append(cur)
+            cur = by_id.get(cur.get("parent_span_id"))
+        for item in reversed(chain):
+            placed.add(id(item))
+            ordered.append(item)
+
+    for s in span_dicts:
+        if s.get("span_id") == root_span_id:
+            place(s)
+    for s in span_dicts:
+        place(s)
+    return ordered
 
 
 def _report(exc: BaseException, fingerprint: str) -> None:

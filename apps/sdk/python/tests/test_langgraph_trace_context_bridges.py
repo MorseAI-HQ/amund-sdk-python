@@ -507,9 +507,9 @@ def test_explicit_trace_wrap_still_works_no_bridge_interference():
 
     trace = tracing._get_last_trace()
     assert trace is not None
-    # Root agent span (from `with run("test-agent")`) + chain agent span.
+    # AID-04: the graph IS the root agent now; no second forked agent span.
     agent_spans = [s for s in trace["spans"] if s.get("type") == "agent"]
-    assert len(agent_spans) >= 2
+    assert [s["name"] for s in agent_spans] == ["MyGraph"]
 
 
 # ---------------------------------------------------------------------------

@@ -118,13 +118,12 @@ def _over_cap(kind: str) -> bool:
 
 
 def _infra_span(kind: str, name: str, input_data: Any | None = None) -> Any:
-    """A span of ``kind`` ("db" | "http") under the active trace, or a no-op
-    when over the per-trace cap."""
+    """A span of ``kind`` ("db" | "http" | "queue") under the active trace, or a
+    no-op when over the per-trace cap. The kind is the wire span type: infra spans
+    are non-billable and never set trace status (ADR-033 D1, MHQ-1404)."""
     if _over_cap(kind):
         return _NO_SPAN
-    return span(
-        name, span_type="custom" if kind == "queue" else kind, input_data=input_data
-    )
+    return span(name, span_type=kind, input_data=input_data)
 
 
 # --- SQL literal scrubbing (INFRACAP-05) ----------------------------------
@@ -443,7 +442,11 @@ def _av_execute_wrapper(execute, sql, params, many, context):  # type: ignore[no
 def _attach_wrapper(connection) -> None:  # type: ignore[no-untyped-def]
     wrappers = getattr(connection, "execute_wrappers", None)
     if wrappers is not None and _av_execute_wrapper not in wrappers:
-        wrappers.append(_av_execute_wrapper)
+        # Django's temporary execute_wrapper contexts remove the last entry
+        # on exit. Lazy SDK initialization can happen inside such a context
+        # (e.g. pghistory's request middleware); appending would make it pop
+        # our permanent hook and leave its own hook behind without state.
+        wrappers.insert(0, _av_execute_wrapper)
 
 
 def enable_django_db_capture() -> bool:

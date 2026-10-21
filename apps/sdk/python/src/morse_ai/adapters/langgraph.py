@@ -53,14 +53,16 @@ LangChain callback when both `langchain` and `langgraph` are importable.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import logging
 import re
+import threading
 import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from morse_ai._internal.agent_name import resolve_agent_name
+from morse_ai._internal.agent_name import identity_legacy
 from morse_ai._internal.errors import absorb_errors
 from morse_ai.adapters._retrieval import build_documents
 from morse_ai.adapters.langchain import MorseCallbackHandler
@@ -105,6 +107,89 @@ _AV_REMEDIATION_PENDING_ATTR = "av_lg_remediation_pending"  # dict | None
 # Patched-method storage for uninstall() restoration. Keys are dotted names
 # like "BaseCheckpointSaver.put" so the matrix is self-documenting.
 _patched_originals: dict[str, Any] = {}
+
+# ----- MHQ-1405: LangGraph control-flow "exceptions" -----
+
+# LangGraph implements interrupts, handoffs (``Command(graph=Command.PARENT)``)
+# and subgraph bubbling by *raising* these through the callback machinery. They
+# are a successful hand-off, not a failure, so they must never mark a span or
+# trace failed. Matched by class name up the MRO (restricted to ``langgraph``
+# modules) so a rename/relocation between LangGraph releases cannot regress it.
+_CONTROL_FLOW_EXC_NAMES = frozenset(
+    {
+        "GraphBubbleUp",
+        "GraphInterrupt",
+        "NodeInterrupt",
+        "ParentCommand",
+        "GraphDelegate",
+    }
+)
+
+
+def _is_control_flow(exc: BaseException | None) -> bool:
+    """True for LangGraph's non-error control-flow exceptions."""
+    if exc is None:
+        return False
+    try:
+        for cls in type(exc).__mro__:
+            if cls.__name__ in _CONTROL_FLOW_EXC_NAMES and (
+                cls.__module__ or ""
+            ).startswith("langgraph"):
+                return True
+    except Exception:  # noqa: BLE001 — never break the host
+        pass
+    return False
+
+
+# ----- MHQ-1403: de-duplicate by LangChain run_id across handlers -----
+
+# One real LLM/chain/tool call carries ONE LangChain ``run_id``. When this
+# adapter's handler reaches a callback manager more than once (the auto-install
+# plus an explicit ``config={"callbacks": [handler]}``, a second explicit
+# instance, or a child manager that inherited one), every instance sees the same
+# run_id. The first instance to see it owns it; the others ignore it and its
+# end/error events, so each call yields exactly one span and tokens/cost are
+# counted once.
+_RUN_OWNERS: dict[str, str] = {}
+_RUN_OWNERS_LOCK = threading.Lock()
+# Safety valve for runs whose end callback never fires (killed task).
+_RUN_OWNERS_MAX = 50_000
+
+_RUN_START_CALLBACKS = (
+    "on_chain_start",
+    "on_llm_start",
+    "on_chat_model_start",
+    "on_tool_start",
+    "on_retriever_start",
+)
+_RUN_FINISH_CALLBACKS = (
+    "on_chain_end",
+    "on_chain_error",
+    "on_llm_end",
+    "on_llm_error",
+    "on_tool_end",
+    "on_tool_error",
+    "on_retriever_end",
+    "on_retriever_error",
+)
+
+
+def _claim_run(token: str, key: str) -> bool:
+    with _RUN_OWNERS_LOCK:
+        owner = _RUN_OWNERS.get(key)
+        if owner is None:
+            if len(_RUN_OWNERS) >= _RUN_OWNERS_MAX:
+                for stale in list(_RUN_OWNERS)[: _RUN_OWNERS_MAX // 2]:
+                    del _RUN_OWNERS[stale]
+            _RUN_OWNERS[key] = token
+            return True
+        return owner == token
+
+
+def _release_run(token: str, key: str) -> None:
+    with _RUN_OWNERS_LOCK:
+        if _RUN_OWNERS.get(key) == token:
+            del _RUN_OWNERS[key]
 
 
 def _classify_store_name(serialized: dict[str, Any] | None) -> str:
@@ -517,6 +602,19 @@ class LangGraphCallbackHandler(MorseCallbackHandler):
     # dashboard.
     _framework_name: str = "langgraph"
 
+    # MHQ-1402: LangChain runs a *sync* handler's callbacks from an async path
+    # in an executor with a COPIED context (``copy_context().run``). Anything
+    # this handler sets in a ContextVar (the auto-trace opened in
+    # ``on_chain_start``) was therefore invisible to every later callback, so
+    # ``asyncio.run(graph.ainvoke(...))`` without ``morse_ai.run()`` recorded
+    # only the root spans. Running inline calls the handler on the event-loop
+    # thread in the caller's context, exactly like the sync path.
+    run_inline: bool = True
+
+    # True for the handler ``install()`` attaches on its own; an explicit
+    # handler the user adds displaces it (see ``install``).
+    _auto_installed: bool = False
+
     def __init__(
         self,
         agent_name: str | None = None,
@@ -537,6 +635,65 @@ class LangGraphCallbackHandler(MorseCallbackHandler):
         """
         super().__init__(agent_name=agent_name)
         self._explicit_traceparent = incoming_traceparent
+        # MHQ-1403: identity for run_id ownership + runs another handler owns.
+        self._claim_token = uuid.uuid4().hex
+        self._dup_runs: set[str] = set()
+
+    # ------------------------------------------------------------------
+    # MHQ-1405 / MHQ-1403 overrides of the generic handler's helpers.
+    # ------------------------------------------------------------------
+
+    def _open_span(  # type: ignore[override]
+        self,
+        run_id: UUID,
+        name: str,
+        span_type: str,
+        input_data: Any = None,
+        parent_run_id: UUID | None = None,
+        kind: str | None = None,
+    ) -> Any:
+        # Idempotent per run_id: a repeated start for a run already open on this
+        # handler must not open (and orphan) a second span.
+        existing = self._span_stack.get(str(run_id))
+        if existing is not None:
+            return existing
+        return super()._open_span(
+            run_id, name, span_type, input_data, parent_run_id=parent_run_id, kind=kind
+        )
+
+    def _close_span(
+        self, run_id: UUID, output_data: Any = None, error: BaseException | None = None
+    ) -> None:
+        # Control flow completes the span; it is not a failure.
+        if _is_control_flow(error):
+            error = None
+        super()._close_span(run_id, output_data=output_data, error=error)
+
+    def _root_native_name(  # type: ignore[override]
+        self, serialized: dict[str, Any] | None, kwargs: dict[str, Any]
+    ) -> str | None:
+        return _graph_name(serialized, kwargs)
+
+    def _finish_claimed_root(
+        self, run_id: UUID, outputs: Any = None, error: BaseException | None = None
+    ) -> None:
+        super()._finish_claimed_root(
+            run_id, outputs, None if _is_control_flow(error) else error
+        )
+
+    def _chain_kind(self, name: str, kwargs: dict[str, Any]) -> str:
+        """A chain LangGraph runs *as* a graph node is a ``node``; the LCEL
+        runnables inside it (they inherit the node's metadata) are ``chain``."""
+        md = kwargs.get("metadata")
+        node = md.get("langgraph_node") if isinstance(md, dict) else None
+        if isinstance(node, str) and node and node in (name, kwargs.get("name")):
+            return "node"
+        return "chain"
+
+    def _maybe_close_auto_trace(self, error: BaseException | None = None) -> None:
+        if _is_control_flow(error):
+            error = None
+        super()._maybe_close_auto_trace(error=error)
 
     # ------------------------------------------------------------------
     # Issue 2 — _active_trace + W3C trace_id bridge.
@@ -590,10 +747,6 @@ class LangGraphCallbackHandler(MorseCallbackHandler):
             self._auto_trace = False
             return
 
-        # Local import — keeps `run` out of this module's module-level deps
-        # mirroring the parent's pattern.
-        from morse_ai.tracing import run  # noqa: PLC0415
-
         # Explicit traceparent (passed at handler-construction time) wins over
         # the lazy OTel-context read. This is the dogfood-Copilot fix path:
         # the LangGraph callback fires in an async/SSE-detached context where
@@ -601,10 +754,7 @@ class LangGraphCallbackHandler(MorseCallbackHandler):
         # caller resolves the traceparent synchronously at view entry and
         # passes it down.
         traceparent = self._explicit_traceparent or _build_otel_traceparent()
-        self._run_context = run(
-            resolve_agent_name(self.agent_name, self._native_name),
-            incoming_traceparent=traceparent,
-        )
+        self._run_context = self._new_run(incoming_traceparent=traceparent)
         self._run_context.__enter__()
         self._auto_trace = True
 
@@ -680,7 +830,19 @@ class LangGraphCallbackHandler(MorseCallbackHandler):
             node_name = _extract_node_name(serialized, kwargs)
             if node_name:
                 traced = self._span_stack.get(str(run_id))
-                if traced is not None and traced._active and traced._span is not None:
+                # AID-02: only the node itself takes the node's name; the LCEL
+                # runnables inside it keep their own (legacy renamed them all).
+                is_node = identity_legacy() or (
+                    traced is not None
+                    and traced._span is not None
+                    and (traced._span.metadata or {}).get("node_kind") == "node"
+                )
+                if (
+                    is_node
+                    and traced is not None
+                    and traced._active
+                    and traced._span is not None
+                ):
                     traced._span.name = node_name
                     md = dict(traced._span.metadata or {})
                     md["langgraph_node"] = node_name
@@ -799,6 +961,7 @@ class LangGraphCallbackHandler(MorseCallbackHandler):
                 f"retriever.{store_name}",
                 span_type=SpanType.MEMORY.value,
                 input_data={"query": str(query)},
+                parent_run_id=parent_run_id,
             )
             if traced is None or not traced._active or traced._span is None:
                 return
@@ -1094,6 +1257,50 @@ class LangGraphCallbackHandler(MorseCallbackHandler):
         traced._span.context_segments = list(existing) + new_segments
         # One-shot consumption — clear so subsequent LLM calls don't reattach.
         state.pending_retrieved_docs.clear()
+
+
+def _wrap_run_start(orig: Any) -> Any:
+    @functools.wraps(orig)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        rid = kwargs.get("run_id")
+        if rid is not None and not _claim_run(self._claim_token, str(rid)):
+            self._dup_runs.add(str(rid))
+            return None
+        return orig(self, *args, **kwargs)
+
+    return wrapper
+
+
+def _wrap_run_finish(orig: Any) -> Any:
+    @functools.wraps(orig)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        rid = kwargs.get("run_id")
+        key = str(rid) if rid is not None else None
+        if key is not None and key in self._dup_runs:
+            self._dup_runs.discard(key)
+            return None
+        try:
+            return orig(self, *args, **kwargs)
+        finally:
+            if key is not None:
+                _release_run(self._claim_token, key)
+
+    return wrapper
+
+
+for _name in _RUN_START_CALLBACKS:
+    setattr(
+        LangGraphCallbackHandler,
+        _name,
+        _wrap_run_start(getattr(LangGraphCallbackHandler, _name)),
+    )
+for _name in _RUN_FINISH_CALLBACKS:
+    setattr(
+        LangGraphCallbackHandler,
+        _name,
+        _wrap_run_finish(getattr(LangGraphCallbackHandler, _name)),
+    )
+del _name
 
 
 def _flatten_messages(messages: Any) -> list[Any]:
@@ -1533,6 +1740,7 @@ def _uninstall_memory_op_patches() -> None:
 # ---------------------------------------------------------------------------
 
 _original_callback_manager_init = None
+_original_add_handler = None
 
 
 @absorb_errors(fingerprint="morse_ai.adapters.langgraph.install")
@@ -1542,7 +1750,7 @@ def install(agent_name: str | None = None) -> bool:
     Idempotent — safe to call repeatedly. Returns True if installed (newly or
     already), False if LangGraph isn't available or installation failed.
     """
-    global _original_callback_manager_init
+    global _original_callback_manager_init, _original_add_handler
 
     try:
         import langgraph  # type: ignore[import-not-found]  # noqa: F401
@@ -1571,21 +1779,52 @@ def install(agent_name: str | None = None) -> bool:
     # already holds the true original (current __init__ is the patched version).
     if not already_installed:
         _original_callback_manager_init = BaseCallbackManager.__init__
+        _original_add_handler = BaseCallbackManager.add_handler
 
     def patched_init(self: Any, *args: Any, **kwargs: Any) -> None:
         _original_callback_manager_init(self, *args, **kwargs)
         try:
+            # MHQ-1403: any Morse handler already on the manager (explicit
+            # LangGraph or generic LangChain one, passed via ``callbacks=``)
+            # means the user chose their own; a second auto-attached one would
+            # record every call again.
             already_attached = any(
-                isinstance(h, LangGraphCallbackHandler) for h in self.handlers
+                isinstance(h, MorseCallbackHandler)
+                for h in (*self.handlers, *self.inheritable_handlers)
             )
             if not already_attached:
-                self.add_handler(LangGraphCallbackHandler(agent_name=agent_name))
+                auto = LangGraphCallbackHandler(agent_name=agent_name)
+                auto._auto_installed = True
+                self.add_handler(auto)
         except Exception as exc:  # noqa: BLE001 — non-invasive
             logger.debug(
                 "morse_ai: failed to attach LangGraph callback to manager: %s", exc
             )
 
     BaseCallbackManager.__init__ = patched_init  # type: ignore[method-assign]
+
+    # MHQ-1403: an explicit Morse handler added AFTER construction (e.g.
+    # ``configure`` adding local callbacks) displaces the auto-installed one.
+    if not getattr(BaseCallbackManager.add_handler, "_morse_patched", False):
+        _add_handler_original = BaseCallbackManager.add_handler
+
+        def patched_add_handler(self: Any, handler: Any, inherit: bool = True) -> None:
+            try:
+                if isinstance(handler, MorseCallbackHandler) and not getattr(
+                    handler, "_auto_installed", False
+                ):
+                    for h in [
+                        h
+                        for h in (*self.handlers, *self.inheritable_handlers)
+                        if getattr(h, "_auto_installed", False)
+                    ]:
+                        self.remove_handler(h)
+            except Exception as exc:  # noqa: BLE001 — non-invasive
+                logger.debug("morse_ai: add_handler dedup swallowed: %s", exc)
+            _add_handler_original(self, handler, inherit)
+
+        patched_add_handler._morse_patched = True  # type: ignore[attr-defined]
+        BaseCallbackManager.add_handler = patched_add_handler  # type: ignore[method-assign]
 
     # MEM-10: monkey-patch BaseCheckpointSaver + BaseStore surfaces.
     # Best-effort — degrades gracefully when a class/method is absent on
@@ -1600,7 +1839,7 @@ def install(agent_name: str | None = None) -> bool:
 @absorb_errors(fingerprint="morse_ai.adapters.langgraph.uninstall")
 def uninstall() -> None:
     """Restore the original LangChain callback manager. Idempotent."""
-    global _original_callback_manager_init
+    global _original_callback_manager_init, _original_add_handler
 
     try:
         import langgraph  # type: ignore[import-not-found]  # noqa: F401
@@ -1617,9 +1856,12 @@ def uninstall() -> None:
             )
 
             BaseCallbackManager.__init__ = _original_callback_manager_init  # type: ignore[method-assign]
+            if _original_add_handler is not None:
+                BaseCallbackManager.add_handler = _original_add_handler  # type: ignore[method-assign]
         except ImportError:
             pass
         _original_callback_manager_init = None
+        _original_add_handler = None
 
     # MEM-10: restore checkpointer/store originals.
     _uninstall_memory_op_patches()

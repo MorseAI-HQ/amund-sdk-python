@@ -191,7 +191,14 @@ def test_drops_aggregate_into_one_report():
     for _ in range(10_000):
         diagnostics.record_drop(diagnostics.REASON_QUEUE_FULL, "span")
 
-    drained = diagnostics._drain_counters()
+    # Only this test's (reason, category) bucket is asserted: daemon exporter
+    # threads that other tests abandon (see _OtelEngine.reset_for_testing) can
+    # record unrelated drops into the same process-global counters.
+    drained = [
+        d
+        for d in diagnostics._drain_counters()
+        if d["reason"] == diagnostics.REASON_QUEUE_FULL and d["category"] == "span"
+    ]
 
     assert len(drained) == 1, "10k drops must not become 10k reports"
     assert drained[0] == {

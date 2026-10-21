@@ -65,6 +65,7 @@ from morse_ai.spans import SpanData, SpanType
 from morse_ai.tracing import (
     _finalize_span,
     _TraceState,
+    apply_end_user,
     get_active_trace,
 )
 from morse_ai.tracing import (
@@ -782,6 +783,8 @@ def _record_llm_span_for_response(
         adapter = AnthropicAdapter()
         telemetry = adapter.extract(response)
         segments = adapter.extract_segments(kwargs or {}, response)
+        _md = (kwargs or {}).get("metadata")
+        apply_end_user(state, _md.get("user_id") if isinstance(_md, dict) else None)
 
         # ADR-023: derive per-source-bucket token composition from segments.
         total_input = telemetry.get("input_tokens") or 0

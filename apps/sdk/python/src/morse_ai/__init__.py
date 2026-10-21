@@ -48,14 +48,30 @@ from morse_ai._internal.errors import absorb_errors
 from morse_ai._internal.redaction import RedactionConfig
 from morse_ai._version import __version__
 from morse_ai.client import _Client
+from morse_ai.prompts import (  # noqa: E402
+    Prompt,
+    PromptAccessError,
+    PromptError,
+    PromptNotFoundError,
+    PromptRateLimitError,
+    clear_prompt_cache,
+    configure_prompt_cache,
+    fetch_prompt_cached,
+    peek_cached_prompt,
+)
 from morse_ai.propagation import extract_traceparent, inject_traceparent
 from morse_ai.record import RunRecord
 from morse_ai.tracing import (
+    _set_agent_version,
     _set_redaction_config,
+    _set_service_version,
     _set_source,
+    link_fetched_prompt,
+    link_record,
     run,
     set_context,
     set_outcome,
+    set_prompt,
     span,
     trace_agent,
 )
@@ -69,6 +85,14 @@ __all__ = [
     "batch_track",
     "record",
     "log",
+    "get_prompt",
+    "configure_prompt_cache",
+    "clear_prompt_cache",
+    "Prompt",
+    "PromptError",
+    "PromptAccessError",
+    "PromptNotFoundError",
+    "PromptRateLimitError",
     "flush",
     "shutdown",
     "quota_state",
@@ -78,6 +102,8 @@ __all__ = [
     "span",
     "set_context",
     "set_outcome",
+    "link_record",
+    "set_prompt",
     # W3C trace context propagation
     "inject_traceparent",
     "extract_traceparent",
@@ -123,6 +149,8 @@ def _build_client(
     redaction_disabled_patterns: list[str] | None = None,
     redaction_extra_patterns: list[str] | None = None,
     source: str | None = None,
+    agent_version: str | None = None,
+    capture_end_user: bool = False,
 ) -> _Client:
     """Construct a fresh `_Client` from explicit args + env-var fallbacks.
 
@@ -146,6 +174,9 @@ def _build_client(
         "redaction_extra_patterns": redaction_extra_patterns,
         "source": resolved_source,
         "git_revision": env.get_git_revision(),
+        "agent_version": agent_version,
+        "service_version": env.get_service_version(),
+        "capture_end_user": capture_end_user,
     }
     if resolved_endpoint is None:
         return _Client(**common_kwargs)
@@ -206,6 +237,8 @@ def init(
     redaction_disabled_patterns: list[str] | None = None,
     redaction_extra_patterns: list[str] | None = None,
     source: str | None = None,
+    agent_version: str | None = None,
+    capture_end_user: bool = False,
 ) -> None:
     """Initialize the Morse SDK singleton.
 
@@ -253,6 +286,17 @@ def init(
             polluting the customer signal. **Customers should leave this
             unset.** The kwarg wins over the ``MORSE_INTERNAL_SOURCE``
             env var; values outside the accepted set are silently dropped.
+        agent_version: Your own label for the deployed agent version (for
+            example ``"2.4.1"`` or a release tag; max 128 chars). Sent on every
+            trace as the default; a per-run ``run(..., agent_version=)``
+            overrides it. Morse also detects the git revision on its own
+            (override with ``MORSE_GIT_REVISION``).
+        capture_end_user: Opt-in, default False. When True, the OpenAI
+            (``user`` / ``safety_identifier``) and Anthropic
+            (``metadata.user_id``) adapters read the end-user value from each
+            call and set the trace ``user_id`` to ``"h:" + sha256(value)[:32]``
+            (the raw value is never sent). A ``user_id`` your app already set
+            (``run(user_id=)``) always wins. ``customer_id`` is never set.
     """
     # Resolve api_key: explicit arg wins, then env var, then error.
     resolved_key = api_key or env.get_api_key()
@@ -278,6 +322,8 @@ def init(
         redaction_disabled_patterns=redaction_disabled_patterns,
         redaction_extra_patterns=redaction_extra_patterns,
         source=source,
+        agent_version=agent_version,
+        capture_end_user=capture_end_user,
     )
 
 
@@ -291,6 +337,8 @@ def _init_impl(
     redaction_disabled_patterns: list[str] | None,
     redaction_extra_patterns: list[str] | None,
     source: str | None = None,
+    agent_version: str | None = None,
+    capture_end_user: bool = False,
 ) -> None:
     """Inner init body — wrapped with absorb_errors so non-config failures
     (network, transport startup) don't crash the host app at boot."""
@@ -316,6 +364,8 @@ def _init_impl(
             redaction_disabled_patterns=redaction_disabled_patterns,
             redaction_extra_patterns=redaction_extra_patterns,
             source=source,
+            agent_version=agent_version,
+            capture_end_user=capture_end_user,
         )
         _log_destination_url(_client)
         auto_detect.install_adapters()
@@ -549,6 +599,106 @@ def log(
     )
 
 
+def get_prompt(
+    name: str,
+    *,
+    label: str | None = None,
+    version: int | None = None,
+    if_none_match: str | None = None,
+    cache_ttl: float | None = None,
+    link: bool = True,
+) -> Prompt:
+    """Fetch a hosted prompt from the Morse prompt registry.
+
+    Selects by ``label`` (default ``"production"``) or by ``version``; passing
+    both raises ``ValueError`` before any request. Pass a previous result's
+    ``etag`` as ``if_none_match`` to get ``Prompt(not_modified=True)`` on a 304.
+
+    This is a plain, synchronous GET: no retries and no fallback.
+
+    Linking (default ``link=True``): when a run is open at call time, the
+    fetched ``(name, version)`` is recorded on it with ``link_source="fetch"``,
+    on the open span if any (like ``set_prompt``). A cache hit links too; a 304
+    links via the SDK's own cached copy, and not at all if there is none. No
+    open run means nothing happens, and linking never raises. Pass
+    ``link=False`` to opt out. If you also call ``set_prompt`` for the same
+    name, version and span, one reference is kept, marked as fetched. The
+    first link in a process logs one info line.
+    Unlike the rest of the SDK it raises, so you can decide what to do:
+    ``PromptAccessError`` (403, key lacks ``prompts:read``), ``PromptNotFoundError``
+    (404), ``PromptRateLimitError`` (429, ``.retry_after``), and ``httpx``'s
+    transport errors on network failure.
+
+    Caching: we recommend caching in some form so Morse is not on your request
+    hot path. Three options: (1) call the API directly every time (the default;
+    the API sends ``Cache-Control: private, max-age=30``); (2) use your own
+    cache; (3) pass ``cache_ttl`` (seconds) for a small process-local LRU. With
+    ``cache_ttl`` a fresh entry is returned without a request; a stale one is
+    revalidated with ``If-None-Match`` (a 304 refreshes it and returns the cached
+    prompt with ``not_modified=False``). Errors always propagate, never masked
+    by stale data. ``None`` or 0 uses no cache; passing your own ``if_none_match``
+    bypasses it. See ``configure_prompt_cache`` and ``clear_prompt_cache``.
+    """
+    if label is not None and version is not None:
+        raise ValueError("Pass either label or version, not both")
+    if not _ensure_initialized():
+        raise PromptError(
+            "morse_ai is not initialized: set MORSE_API_KEY or call "
+            "morse_ai.init() before get_prompt()"
+        )
+    assert _client is not None
+    api_key = _client._api_key  # noqa: SLF001
+    result = fetch_prompt_cached(
+        endpoint=_client.endpoint,
+        api_key=api_key,
+        name=name,
+        label=label,
+        version=version,
+        if_none_match=if_none_match,
+        cache_ttl=cache_ttl,
+    )
+    if link:
+        _link_fetched(result, _client.endpoint, api_key, name, label, version)
+    return result
+
+
+_prompt_link_logged = False
+
+
+def _link_fetched(
+    result: Prompt,
+    endpoint: str,
+    api_key: str,
+    name: str,
+    label: str | None,
+    version: int | None,
+) -> None:
+    """Best-effort UP-09 link of the open run to a fetched prompt. Never raises."""
+    global _prompt_link_logged
+    try:
+        prompt: Prompt | None = result
+        if result.not_modified:
+            prompt = peek_cached_prompt(
+                endpoint=endpoint,
+                api_key=api_key,
+                name=name,
+                label=label,
+                version=version,
+            )
+        if prompt is None or prompt.name is None or prompt.version is None:
+            return
+        if link_fetched_prompt(prompt.name, prompt.version) and not _prompt_link_logged:
+            _prompt_link_logged = True
+            logger.info(
+                "morse_ai: get_prompt() linked prompt %r v%s to the open run; "
+                "pass link=False to opt out.",
+                prompt.name,
+                prompt.version,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("morse_ai: get_prompt link skipped: %s", exc)
+
+
 @absorb_errors(fingerprint="morse_ai.flush")
 def flush() -> None:
     """Block until all queued events are sent. Silently no-ops if uninitialized."""
@@ -619,6 +769,8 @@ def _reset_for_testing() -> None:
     unsupported.
     """
     global _client, _no_api_key_warning_emitted, _last_logged_endpoint
+    global _prompt_link_logged
+    _prompt_link_logged = False
     if _client is not None:
         _client._reset_for_testing()  # noqa: SLF001 — test-only fast teardown
         _client = None
@@ -628,6 +780,8 @@ def _reset_for_testing() -> None:
     # call init() observe pass-through behaviour.
     _set_redaction_config(None)
     _set_source(None)
+    _set_agent_version(None)
+    _set_service_version(None)
     # Defer import to avoid a circular at module load.
     from morse_ai._internal import diagnostics
 

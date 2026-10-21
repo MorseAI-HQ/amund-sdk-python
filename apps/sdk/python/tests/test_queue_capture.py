@@ -72,7 +72,7 @@ def test_celery_publish_inside_trace_records_span_and_injects_traceparent(celery
     assert meta["messaging.system"] == "celery"
     assert meta["messaging.operation.type"] == "publish"
     assert meta["messaging.destination.name"] == "agents"
-    assert spans[0]["type"] == "custom"
+    assert spans[0]["type"] == "queue"
     assert "secret-arg-canary" not in str(_get_last_trace())
     headers = _published_headers(celery_app)
     assert headers["traceparent"].startswith(expected_prefix)

@@ -21,8 +21,11 @@ from morse_ai._internal.redaction import RedactionConfig
 from morse_ai.spans import SpanData, SpanType
 from morse_ai.tracing import (
     _send_trace,
+    _set_agent_version,
+    _set_capture_end_user,
     _set_git_revision,
     _set_redaction_config,
+    _set_service_version,
     _set_source,
     _set_transport,
 )
@@ -63,6 +66,9 @@ class _Client:
         redaction_extra_patterns: list[str] | None = None,
         source: str | None = None,
         git_revision: str | None = None,
+        agent_version: str | None = None,
+        service_version: str | None = None,
+        capture_end_user: bool = False,
     ) -> None:
         self._api_key = api_key
         self._endpoint = endpoint
@@ -91,6 +97,9 @@ class _Client:
         _set_redaction_config(self._redaction_config)
         _set_source(self._source)
         _set_git_revision(self._git_revision)
+        _set_agent_version(agent_version)
+        _set_capture_end_user(capture_end_user)
+        _set_service_version(service_version)
 
         # MHQ-668: run()/span()/trace_agent's real emission pipeline — real
         # OTel spans over OTLP protobuf+gzip. Configured unconditionally

@@ -5,7 +5,7 @@ buffer.
 
 Producer side (default-on, active trace only)
     Publishing a Celery task or an SQS message inside a Morse trace records a
-    ``custom`` span named ``publish <destination>`` carrying OTel messaging
+    ``queue`` span named ``publish <destination>`` carrying OTel messaging
     attributes in metadata (``messaging.system``, ``messaging.operation.type``,
     ``messaging.destination.name``), and injects a W3C ``traceparent`` into the
     message headers / message attributes. Message bodies, task arguments and
@@ -72,7 +72,7 @@ def _traceparent_now() -> str | None:
 
 
 def _publish_span(system: str, destination: str | None, extra: dict | None = None):
-    """A ``custom`` publish span with OTel messaging attributes."""
+    """A ``queue`` publish span with OTel messaging attributes."""
     name = f"publish {destination}" if destination else "publish"
     # Class name only on failure: broker errors can embed the connection URL,
     # credentials included.

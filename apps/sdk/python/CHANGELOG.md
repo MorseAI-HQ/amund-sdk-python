@@ -9,7 +9,58 @@ The Python and TypeScript SDKs version **independently** — they share `0.4.0` 
 their first public release because they reached feature parity there, not
 because they are released in lockstep. Expect the numbers to diverge.
 
+## [0.8.0] — Unreleased
+
+### Changed — behaviour change, default-on (agent-identity-v2, MHQ-1408)
+
+Set `MORSE_AGENT_IDENTITY=legacy` to restore the previous naming and span shape.
+
+- **One real agent per app.** The root agent is named in this order: `run("name")`, the framework's
+  own root (LangGraph graph name, OpenAI Agents starting agent), `OTEL_SERVICE_NAME`, then the entry
+  script. A name that came from the entry script is sent with `identity_source=entry_script` so the
+  Agents page can ask you to name it.
+- **`run("name")` no longer forks a second agent.** Around a framework app, the discovered root keeps
+  the agent identity and the run name is sent as the `morse.app` label.
+- **LangChain/LangGraph internals are spans, not agents.** Chains, prompt/parser wrappers and
+  `__start__`/`tools`/`agent` nodes are `custom` spans (`metadata.node_kind` = `chain`/`node`). A
+  graph node that makes an LLM call (an analyst, a supervisor) is still an agent.
+- **Correct parents.** LangChain spans parent from the callback run tree, so parallel branches no
+  longer nest under each other and LLM/tool spans no longer land on the root placeholder. Spans
+  leave the shared stack by identity, not `pop()`.
+- **OpenAI Agents:** a handoff target is a sub-agent of the agent that handed off to it.
+
 ## [0.7.0] — Unreleased
+
+### Added
+
+- **`get_prompt(name, *, label=None, version=None, if_none_match=None, cache_ttl=None)`** fetches a hosted prompt
+  from the registry (`GET /api/v1/prompts/{name}`, needs a key with the `prompts:read` scope).
+  Returns `Prompt(name, version, template_text, labels, etag, not_modified)`; a 304 gives
+  `not_modified=True` with the etag. Typed errors `PromptAccessError`, `PromptNotFoundError`,
+  `PromptRateLimitError` (`.retry_after`), all subclassing `PromptError`. Deliberately thin: no
+  retries, no fallback.
+- **Optional prompt cache.** `get_prompt(..., cache_ttl=seconds)` serves a process-local LRU
+  (default 256 entries, thread-safe); stale entries revalidate with `If-None-Match` and errors are
+  never masked by stale data. Off by default (`None`/`0`): no cache read or write. Passing your own
+  `if_none_match` bypasses it. New `configure_prompt_cache(max_entries=256)` and
+  `clear_prompt_cache()`. We recommend caching in some form: call the API directly, use your own
+  cache, or use `cache_ttl`.
+- **OpenAI Responses thread facts.** `responses.create` LLM spans now carry `response_id`,
+  `previous_response_id` and `conversation_id` (a string, or the `id` of a conversation object) in
+  span metadata, only for the keys present. Streamed calls get `previous_response_id` and
+  `conversation_id` only, since no final response object is available to the adapter.
+  No new public function.
+- **`init(capture_end_user=False)`: opt-in end-user capture.** When `True`, the OpenAI adapter
+  reads `user` / `safety_identifier` and the Anthropic adapter reads `metadata.user_id`, and sets
+  the trace `user_id` to `"h:" + sha256(value)[:32]`. The raw value is never sent, a `user_id` the
+  app already set wins, and `customer_id` is never set. Off by default: behaviour is unchanged.
+
+- **`get_prompt(..., link=True)` links the open run to the fetched prompt version** (UP-09). With a
+  run open at call time, the fetched `(name, version)` is recorded with `link_source="fetch"` (JSON
+  `prompts[].link_source`; OTLP `morse.prompt.link_source`), on the open span if any. Cache hits link;
+  a 304 links via the SDK's own cached copy (none cached: no link); no open run: no-op; never raises.
+  Opt out with `link=False`. A `set_prompt` for the same name, version and span is deduped into one
+  reference marked `fetch`. One info log line per process on the first link.
 
 ### Changed — behaviour change, no API change
 
@@ -29,10 +80,15 @@ because they are released in lockstep. Expect the numbers to diverge.
   messages carry row values, request paths and broker credentials.
 - **Per-trace caps:** at most 200 `db`, 100 `http` and 100 queue publish spans per trace; the rest
   fold into one summary span per kind (`infra.suppressed_count`).
+- **Infra spans never fail a trace, and queue spans are not billable** (MHQ-1404). A failed
+  `db`, `http` or `queue` span stays failed on its own row, but the server no longer marks the
+  whole trace failed because of it. Queue publish spans now carry the new `queue` span type
+  (was `custom`) and join `db`/`http` as non-billable (ADR-033 D1). Needs a server that knows the
+  `queue` type; older servers reject it.
 
 ### Added
 
-- **Queue spans.** Celery and SQS (`boto3`) publishes inside a trace record a `custom` span
+- **Queue spans.** Celery and SQS (`boto3`) publishes inside a trace record a `queue` span
   `publish <destination>` with OpenTelemetry messaging attributes, and inject a W3C `traceparent`
   into the message headers / message attributes. On by default; `MORSE_CAPTURE_QUEUE=0` disables.
 - **Consumer-side trace continuation, opt-in** (`MORSE_CAPTURE_QUEUE_CONSUMER=1`): Celery workers
@@ -42,10 +98,62 @@ because they are released in lockstep. Expect the numbers to diverge.
 - `benchmarks/infra_capture_overhead.py` — measures no-trace overhead and per-span cost against
   fixed thresholds.
 
+### Added — attribution capture (MHQ-1275)
+
+All additive; old servers ignore the new fields and old SDKs send none.
+
+- **`morse_ai.link_record(key_type, key_value)`** and
+  **`run(..., record_keys={...})`** link a trace to business-record ids (a ticket,
+  an order) so later outcomes can be matched to it. Keys accumulate; invalid
+  ones are dropped with a debug log; max 20 per trace. Use opaque ids, not
+  personal data.
+- **`init(..., agent_version=)`** and **`run(..., agent_version=)`**: a declared
+  version label (max 128 chars); the per-run value overrides the init default.
+- **`morse_ai.set_prompt(name, version=None)`** records a prompt reference on the
+  current trace, pinned to the open span when called inside one (max 20 per
+  trace). OTLP carries one reference per span (last one wins on that span); the
+  JSON path carries all.
+- **Git revision detection** now also honours `MORSE_GIT_REVISION` (highest
+  priority, for Docker builds with no `.git`) and `SOURCE_VERSION`.
+- **`service.version`** is read from `OTEL_RESOURCE_ATTRIBUTES` and sent as a
+  resource attribute on both the OTLP and JSON paths. No new `init()` parameter.
+- Wire: trace fields `record_keys`, `agent_version`, `prompts`; OTLP root-span
+  attributes `morse.record_key.<type>`, `morse.agent_version`; span attributes
+  `morse.prompt.name` / `morse.prompt.version`.
+
 ### Fixed
 
+- **OpenAI Agents adapter records failures and the served model** (MHQ-1406). A model-call
+  exception under a bare `Runner.run/run_sync/run_streamed` now fails the trace (with
+  `error_message` and `exception_type`) instead of storing it `completed`; a function tool that
+  raises (which the Agents SDK swallows and feeds back to the model) now shows a `failed` tool
+  span; and an `Agent` with no `model=` resolves `RunConfig.model` / the SDK default so the LLM
+  span carries a model name and gets priced.
+
+- **claude-agent-sdk adapter: tool error detail and sub-agent nesting (MHQ-1416).** A failed tool span now carries the tool's error text as `error_message` (first 500 chars) and a `<Tool>ToolError` exception type, one span per call (the CLI fires both `PostToolUseFailure` and `PostToolUse`). A sub-agent's tool and LLM spans now nest under its named agent span instead of the root, and spans are sent parents-first so the ingest no longer rewrites a forward-referenced parent to the root.
+
+- **OpenAI Responses API calls are now traced** (MHQ-1198). `wrap()` and
+  `install()` instrument `client.responses.create` for synchronous and asynchronous
+  clients, alongside Chat Completions. Non-streaming Responses calls record model
+  and token usage, with input/output capture and context segments. `install()` skips the Responses
+  patch when the installed OpenAI package does not expose the resource classes.
 - Untraced `httpx` / `requests` calls no longer parse the request URL just to find out there is
   no trace to attach to.
+- **LangGraph adapter: async graphs, duplicate LLM spans, control flow** (MHQ-1402, MHQ-1403,
+  MHQ-1405). `asyncio.run(graph.ainvoke(...))` without `morse_ai.run()` now records the same
+  llm/tool/node spans, tokens and cost as the sync path (it stored only two spans: LangChain ran
+  the handler in a copied context, so the auto-trace was invisible to later callbacks). Each real
+  LLM/chain/tool call is recorded once however the handler was attached (auto-install plus an
+  explicit `callbacks=[...]`, two instances, inherited child managers), so tokens and cost are no
+  longer doubled or tripled. `ParentCommand`, `GraphInterrupt`, `NodeInterrupt` and other
+  `GraphBubbleUp` control-flow exceptions no longer mark spans or traces failed.
+
+- **LangChain/LCEL spans keep their nesting** (MHQ-1412). Spans reach the OTLP exporter in
+  completion order (child before parent), and the replay only parented a span on parents it had
+  already emitted, so prompt/LLM/parser spans under a chain were stored under the trace-root
+  placeholder (`0000…0001`). Parents are now emitted before their children. Affects every adapter
+  that nests spans, not only LangChain. Also: `framework` is now set from LLM/tool/retriever
+  callbacks, not only `on_chain_start`.
 
 ### Added
 

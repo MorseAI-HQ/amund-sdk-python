@@ -106,6 +106,70 @@ _TERMINAL_TASK_STATUSES = frozenset({"completed", "failed", "stopped", "killed"}
 
 _MAX_AGENT_NAME_LEN = 128
 
+# MHQ-1416: durable ids that outlive ``_open_agent_spans``. Confirmed live
+# (2026-10-18, claude-agent-sdk 0.2.168) that the wrapper Agent tool's
+# PostToolUse fires almost immediately (the sub-agent runs in the background),
+# long before the sub-agent's own tool hooks and messages. Looking the parent
+# up in the *open* maps therefore found nothing and the sub-agent's tool spans
+# were detached. These maps are never popped on finalization (FIFO-capped).
+_agent_span_ids: dict[str, str] = {}  # agent_id -> AGENT span_id
+_task_agent_span_ids: dict[str, str] = {}  # task tool_use_id -> AGENT span_id
+# tool_use_id -> emitted tool span, so the PostToolUseFailure / PostToolUse pair
+# (both fire for one failed call) yields ONE span and the failure wins.
+_tool_spans_by_tid: dict[str, Any] = {}
+_BOUNDED_MAP_CAP = 2048
+
+# Tool error text is bounded; redaction happens server-side.
+_MAX_TOOL_ERROR_LEN = 500
+
+
+def _remember(mapping: dict[str, Any], key: str, value: Any) -> None:
+    """Insert into a FIFO-capped dict so a long-lived process cannot leak."""
+    mapping[key] = value
+    while len(mapping) > _BOUNDED_MAP_CAP:
+        mapping.pop(next(iter(mapping)))
+
+
+def _tool_error_text(error: Any) -> str | None:
+    """Normalise a tool error (str or content-block list) to <=500 chars."""
+    if error is None:
+        return None
+    if isinstance(error, list):
+        parts = []
+        for item in error:
+            text = item.get("text") if isinstance(item, dict) else None
+            parts.append(text if isinstance(text, str) else str(item))
+        error = "\n".join(parts)
+    text = error if isinstance(error, str) else str(error)
+    text = text.strip()
+    return text[:_MAX_TOOL_ERROR_LEN] or None
+
+
+def _tool_error_type(tool_name: str) -> str:
+    """Synthetic exception class name for a tool failure (no Python exc exists)."""
+    cleaned = "".join(ch for ch in tool_name if ch.isalnum()) or "Tool"
+    return f"{cleaned[:64]}ToolError"
+
+
+def _mark_tool_span_failed(span: Any, tool_name: str, error: Any) -> None:
+    span.status = "failed"
+    message = _tool_error_text(error)
+    if message:
+        span.error_message = message
+    span.exception_type = _tool_error_type(tool_name)
+
+
+def _subagent_parent_span_id(msg: Any) -> str | None:
+    """Parent span for a message emitted by a sub-agent.
+
+    The CLI stamps ``parent_tool_use_id`` (the spawning Agent/Task tool call)
+    on every message a sub-agent produces.
+    """
+    tid = getattr(msg, "parent_tool_use_id", None)
+    if not tid:
+        return None
+    return _task_agent_span_ids.get(tid) or _task_span_ids.get(tid)
+
 
 def _sanitize_agent_name(name: str) -> str:
     """Strip control chars and cap length — agent_type is developer-controlled
@@ -192,7 +256,11 @@ def _finalize_all_pending_spawns(state: Any) -> None:
     this after some spawns already finalized via a real terminal message is
     a no-op for those.
     """
-    for task_tid in list(_task_span_ids):
+    pending = list(_task_span_ids)
+    # MHQ-1416: a spawn whose wrapper span already closed (the Agent tool's
+    # PostToolUse fires at launch) can still have an open AGENT span.
+    pending += [t for t in _agent_to_task_tid.values() if t not in _task_span_ids]
+    for task_tid in pending:
         _finalize_spawn_by_task_tid(task_tid, state)
 
 
@@ -303,6 +371,14 @@ async def _av_post_tool_use(
         hook_input.get("tool_response") if not failed else hook_input.get("error")
     )
 
+    # Both PostToolUseFailure and PostToolUse fire for a failed call (measured
+    # live, MHQ-1416). One span per tool_use_id; a failure always wins.
+    existing = _tool_spans_by_tid.get(tid) if tid else None
+    if existing is not None:
+        if failed and existing.status != "failed":
+            _mark_tool_span_failed(existing, tool_name, tool_response)
+        return {}
+
     timer_entry = _tool_timers.pop(tid, None)
     if timer_entry:
         call_start, started_at_iso = timer_entry
@@ -324,6 +400,10 @@ async def _av_post_tool_use(
         open_agent = _open_agent_spans.get(agent_id)
         if open_agent:
             parent_span_id = open_agent[0].span_id
+        elif agent_id in _agent_span_ids:
+            # MHQ-1416: AGENT span already finalized (or its spawn already
+            # settled) but this hook is still arriving.
+            parent_span_id = _agent_span_ids[agent_id]
         else:
             task_tid = _agent_to_task_tid.get(agent_id)
             parent_span_id = _task_span_ids.get(task_tid) if task_tid else None
@@ -351,18 +431,17 @@ async def _av_post_tool_use(
     if started_at_iso:
         span.started_at = started_at_iso
     _finalize_span(span, call_start, status="failed" if failed else "completed")
+    if failed:
+        _mark_tool_span_failed(span, tool_name, tool_response)
     state.completed_spans.append(span)
-    # Clean up agent→task mapping and flush any AGENT span(s) opened for
-    # this Task once it completes — the sub-agent has necessarily finished.
-    if is_spawn:
-        stale = [aid for aid, t in _agent_to_task_tid.items() if t == tid]
-        for aid in stale:
-            _agent_to_task_tid.pop(aid, None)
-            agent_span_entry = _open_agent_spans.pop(aid, None)
-            if agent_span_entry:
-                agent_span, agent_start_mono = agent_span_entry
-                _finalize_span(agent_span, agent_start_mono)
-                state.completed_spans.append(agent_span)
+    if tid:
+        _remember(_tool_spans_by_tid, tid, span)
+    # MHQ-1416: the wrapper Agent tool's PostToolUse fires as soon as the
+    # sub-agent is *launched*, not when it finishes, so it must NOT finalize
+    # the AGENT span or drop the agent->task mapping: the sub-agent's tool and
+    # LLM activity is still to come. The AGENT span is finalized by the
+    # completion signals (TaskNotification / TaskUpdated / SubagentStop) or,
+    # failing those, the ResultMessage fallback.
     return {}
 
 
@@ -406,6 +485,8 @@ async def _av_subagent_start(
         metadata={"agent_id": agent_id},
     )
     _open_agent_spans[agent_id] = (span, time.monotonic())
+    _remember(_agent_span_ids, agent_id, span.span_id)
+    _remember(_task_agent_span_ids, task_tid, span.span_id)
     return {}
 
 
@@ -596,7 +677,8 @@ def _emit_llm_span_from_assistant_msg(
             trace_id=state.trace_id,
             type=SpanType.LLM,
             name="claude-agent-sdk.messages.create",
-            parent_span_id=state.span_stack[-1].span_id if state.span_stack else None,
+            parent_span_id=_subagent_parent_span_id(msg)
+            or (state.span_stack[-1].span_id if state.span_stack else None),
             model=model or None,
             input_tokens=total_input if total_input else None,
             output_tokens=output_tokens if output_tokens else None,
@@ -617,32 +699,63 @@ def _emit_llm_span_from_assistant_msg(
         )
 
 
-def _emit_tool_spans_from_stream(content: Any, state: Any) -> None:
+def _apply_tool_results_from_stream(content: Any) -> None:
+    """MHQ-1416: complete fallback tool spans from ToolResultBlocks.
+
+    The CLI delivers ``ToolResultBlock`` in the *following* ``UserMessage``, not
+    in the AssistantMessage that carried the ``ToolUseBlock``, so pairing inside
+    one message never matched. Here a result is applied to the span already
+    emitted for its ``tool_use_id``: output on success, ``failed`` status +
+    bounded ``error_message`` + synthetic exception type when ``is_error``.
+    """
+    if not isinstance(content, list):
+        return
+    for block in content:
+        if type(block).__name__ != "ToolResultBlock":
+            continue
+        span = _tool_spans_by_tid.get(getattr(block, "tool_use_id", None) or "")
+        if span is None:
+            continue
+        result = getattr(block, "content", None)
+        if getattr(block, "is_error", False):
+            _mark_tool_span_failed(span, span.name, result)
+        if result is not None and span.output_data is None:
+            span.output_data = {"response": _safe_serialize(result)}
+
+
+def _emit_tool_spans_from_stream(
+    content: Any, state: Any, parent_override: str | None = None
+) -> None:
     """C.3 fallback: parse ToolUseBlock/ToolResultBlock from AssistantMessage content.
 
     Called only when AV hooks were NOT injected (older SDK or injection failure).
     Pairs ToolUseBlock → ToolResultBlock by id within the same message; unpaired
-    ToolUseBlocks get a span with no output_data.
+    ToolUseBlocks get a span that a later UserMessage's ToolResultBlock completes
+    (``_apply_tool_results_from_stream``). ``parent_override`` parents the spans
+    under a sub-agent's AGENT span (MHQ-1416).
     """
     if not content:
         return
     now = time.monotonic()
     # First pass: collect ToolResultBlocks for pairing.
-    results: dict[str, Any] = {}
+    result_blocks: dict[str, Any] = {}
     for block in content:
         if type(block).__name__ == "ToolResultBlock":
             tid = getattr(block, "tool_use_id", None)
             if tid:
-                results[tid] = getattr(block, "content", None)
+                result_blocks[tid] = block
 
-    parent = state.span_stack[-1].span_id if state.span_stack else None
+    parent = parent_override or (
+        state.span_stack[-1].span_id if state.span_stack else None
+    )
     for block in content:
         if type(block).__name__ != "ToolUseBlock":
             continue
         tool_id = getattr(block, "id", None)
         tool_name = getattr(block, "name", None) or "tool"
         tool_input = getattr(block, "input", {}) or {}
-        result = results.get(tool_id) if tool_id else None
+        result_block = result_blocks.get(tool_id) if tool_id else None
+        result = getattr(result_block, "content", None)
         is_spawn = tool_name in ("Task", "Agent")
         span = SpanData(
             trace_id=state.trace_id,
@@ -657,7 +770,11 @@ def _emit_tool_spans_from_stream(content: Any, state: Any) -> None:
             metadata={"askl_is_spawn": True} if is_spawn else None,
         )
         _finalize_span(span, now)
+        if result_block is not None and getattr(result_block, "is_error", False):
+            _mark_tool_span_failed(span, tool_name, result)
         state.completed_spans.append(span)
+        if tool_id:
+            _remember(_tool_spans_by_tid, tool_id, span)
 
 
 def _wrap_client_query(original):
@@ -699,6 +816,40 @@ def _apply_result_message(traced_run: TracedRun, msg: Any) -> None:
     if root.metadata is None:
         root.metadata = {}
     root.metadata["sdk_total_cost_usd"] = round(float(total_cost), 6)
+
+
+def _order_parents_first(state: Any) -> None:
+    """Reorder ``state.completed_spans`` so every parent precedes its children.
+
+    MHQ-1416: the ingest resolves ``parent_span_id`` only against spans that
+    appear EARLIER in the payload; a forward reference is silently rewritten to
+    the sentinel root (measured on dev 2026-10-18 with a no-LLM probe: child
+    before parent -> parent ``...0001``; parent before child -> correct). The
+    adapter appends spans in completion order, and a sub-agent's AGENT span
+    completes last, so its tool/LLM children always preceded it. Stable: spans
+    keep their relative order unless a parent must move ahead of a child.
+    """
+    spans = getattr(state, "completed_spans", None)
+    if not spans or len(spans) < 2:
+        return
+    present = {sp.span_id for sp in spans}
+    emitted: set[str] = set()
+    ordered: list[Any] = []
+    pending = list(spans)
+    while pending:
+        deferred = []
+        for sp in pending:
+            parent = sp.parent_span_id
+            if parent is None or parent not in present or parent in emitted:
+                ordered.append(sp)
+                emitted.add(sp.span_id)
+            else:
+                deferred.append(sp)
+        if len(deferred) == len(pending):  # cycle: give up, keep as-is
+            ordered.extend(deferred)
+            break
+        pending = deferred
+    spans[:] = ordered
 
 
 async def _consume_traced(
@@ -746,7 +897,11 @@ async def _consume_traced(
                 if not _is_thinking_only(content):
                     _emit_llm_span_from_assistant_msg(msg, call_start, call_start_iso)
                     if use_fallback and current is not None:
-                        _emit_tool_spans_from_stream(content, current)
+                        _emit_tool_spans_from_stream(
+                            content, current, _subagent_parent_span_id(msg)
+                        )
+            elif msg_type == "UserMessage" and use_fallback:
+                _apply_tool_results_from_stream(getattr(msg, "content", None))
             elif msg_type in _LIFECYCLE_MESSAGES:
                 _handle_task_lifecycle_message(msg, msg_type, current)
             elif msg_type == "ResultMessage":
@@ -763,11 +918,15 @@ async def _consume_traced(
         # __exit__ sends completed_spans immediately, so a spawn span that
         # appends after that point is already too late.
         await _drain_pending_spawns()
+        if state is not None:
+            _order_parents_first(state)
         if traced_run is not None:
             traced_run.__exit__(type(exc), exc, exc.__traceback__)
         raise
     else:
         await _drain_pending_spawns()
+        if state is not None:
+            _order_parents_first(state)
         if traced_run is not None:
             traced_run.__exit__(None, None, None)
     finally:

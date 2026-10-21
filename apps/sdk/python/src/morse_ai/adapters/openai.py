@@ -45,6 +45,7 @@ from morse_ai.spans import SpanData, SpanType
 from morse_ai.tracing import (
     _finalize_span,
     _TraceState,
+    apply_end_user,
     get_active_trace,
 )
 from morse_ai.tracing import run as _av_run
@@ -440,6 +441,31 @@ def _extract_responses_output_text(response: Any) -> str | None:
     return truncated
 
 
+def _responses_thread_facts(
+    response: Any, kwargs: dict[str, Any] | None
+) -> dict[str, str]:
+    """SETUP-09: ``response_id`` / ``previous_response_id`` / ``conversation_id``.
+
+    Only keys that are present are returned.
+    """
+    facts: dict[str, str] = {}
+    kw = kwargs or {}
+    rid = getattr(response, "id", None)
+    if rid is None and isinstance(response, dict):
+        rid = response.get("id")
+    if isinstance(rid, str) and rid:
+        facts["response_id"] = rid
+    prev = kw.get("previous_response_id")
+    if isinstance(prev, str) and prev:
+        facts["previous_response_id"] = prev
+    conv = kw.get("conversation")
+    if not isinstance(conv, str):
+        conv = conv.get("id") if isinstance(conv, dict) else getattr(conv, "id", None)
+    if isinstance(conv, str) and conv:
+        facts["conversation_id"] = conv
+    return facts
+
+
 def _record_llm_span_for_response(
     name: str,
     response: Any,
@@ -454,6 +480,13 @@ def _record_llm_span_for_response(
     try:
         adapter = OpenAIAdapter()
         telemetry = adapter.extract(response)
+        thread_facts: dict[str, str] = {}
+        if api == _RESPONSES:
+            thread_facts = _responses_thread_facts(response, kwargs)
+        apply_end_user(
+            state,
+            (kwargs or {}).get("user") or (kwargs or {}).get("safety_identifier"),
+        )
         if api == _RESPONSES:
             # Normalize to the chat shape so input capture and segments are shared.
             kwargs = {
@@ -481,6 +514,8 @@ def _record_llm_span_for_response(
             input_data=_safe_input_messages(kwargs),
             output_data={"content": output_text} if output_text else None,
         )
+        if thread_facts:
+            span.metadata = dict(thread_facts)
         if started_at_iso is not None:
             span.started_at = started_at_iso
         _finalize_span(span, start_mono)

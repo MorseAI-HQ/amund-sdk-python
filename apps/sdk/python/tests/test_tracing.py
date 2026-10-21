@@ -19,7 +19,8 @@ class TestSpanType:
         assert SpanType.CUSTOM == "custom"
 
     def test_enum_values_match_backend(self):
-        # "memory" added in Phase 9 (Memory Profiler), "retriever" already
+        # "queue" added with MHQ-1404 (broker publish spans); "memory" added in
+        # Phase 9 (Memory Profiler), "retriever" already
         # present in the backend (apps/api/apps/traces/models.py) — keep in
         # sync with the backend SpanType TextChoices there.
         values = {s.value for s in SpanType}
@@ -29,6 +30,7 @@ class TestSpanType:
             "tool",
             "http",
             "db",
+            "queue",
             "custom",
             "memory",
             "retriever",

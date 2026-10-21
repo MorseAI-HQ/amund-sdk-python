@@ -48,12 +48,14 @@ from morse_ai._internal.active_framework import (
     clear_active_framework,
     set_active_framework,
 )
+from morse_ai._internal.agent_name import identity_legacy
 from morse_ai._internal.errors import absorb_errors
 from morse_ai.pricing import calculate_cost
 from morse_ai.spans import SpanData, SpanType
 from morse_ai.tracing import (
     _finalize_span,
     _TraceState,
+    adopt_native_root,
     adopt_thread_id,
     get_active_trace,
 )
@@ -209,6 +211,105 @@ def _extract_usage(response: Any) -> dict[str, Any]:
     return out
 
 
+def _exit_auto_run(auto_run_cm: Any, exc: BaseException | None = None) -> None:
+    """Close the trace this adapter opened, forwarding any propagating error.
+
+    MHQ-1406: the adapter used to exit with ``(None, None, None)`` even when the
+    Agents SDK raised, so a model-call failure under a bare ``Runner`` was stored
+    ``completed``. ``TracedRun.__exit__`` already knows how to fail a trace from
+    exception info (it is what the explicit ``morse_ai.run()`` path uses).
+    """
+    if auto_run_cm is None:
+        return
+    try:
+        if exc is None:
+            auto_run_cm.__exit__(None, None, None)
+        else:
+            auto_run_cm.__exit__(type(exc), exc, exc.__traceback__)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _resolve_model_name(agent: Any, run_config: Any) -> str | None:
+    """Name of the model a run will actually call, or None if unknowable.
+
+    Mirrors the Agents SDK's own precedence: ``RunConfig.model`` overrides
+    ``Agent.model``, and with neither set the SDK uses its default model
+    (``OPENAI_DEFAULT_MODEL`` or the built-in). The response object carries no
+    model name on the Responses API, so without this the span has ``model=NULL``
+    and the server cannot price it (MHQ-1406, same class as MHQ-926).
+    """
+
+    def _name(candidate: Any) -> str | None:
+        if candidate is None:
+            return None
+        if isinstance(candidate, str):
+            return candidate or None
+        for attr in ("model", "model_name"):
+            value = getattr(candidate, attr, None)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    with contextlib.suppress(Exception):
+        configured = getattr(run_config, "model", None)
+        if configured is not None:
+            # A nameless Model object still overrides the agent's model.
+            return _name(configured) or _default_model_name()
+        named = _name(getattr(agent, "model", None))
+        if named:
+            return named
+        if getattr(agent, "model", None) is None:
+            return _default_model_name()
+    return None
+
+
+def _default_model_name() -> str | None:
+    with contextlib.suppress(Exception):
+        from agents.models import get_default_model  # type: ignore[import-not-found]
+
+        name = get_default_model()
+        if isinstance(name, str) and name:
+            return name
+    return None
+
+
+# Prefix of the string the Agents SDK hands the model when a function tool
+# raises and no custom ``failure_error_function`` is set.
+_TOOL_ERROR_PREFIX = "An error occurred while running the tool."
+_TOOL_TIMEOUT_RE = ("Tool '", "' timed out after ")
+
+# (formatted error string, exception class name) of the most recent default
+# tool-error formatting in this context — see ``_install_tool_error_patch``.
+_tool_error: ContextVar[tuple[str, str | None, str] | None] = ContextVar(
+    "morse_ai_openai_agents_tool_error", default=None
+)
+_original_default_tool_error_function = None
+
+
+def _tool_failure(result: Any) -> tuple[str, str | None] | None:
+    """Return (error_message, exception_type) if ``result`` is an SDK tool error.
+
+    The Agents SDK catches a raising function tool, turns the exception into a
+    string for the model, and then calls ``on_tool_end`` with that string — so
+    the hook cannot tell it from a normal result except by shape (MHQ-1406).
+    """
+    if not isinstance(result, str):
+        return None
+    if result.startswith(_TOOL_ERROR_PREFIX):
+        recorded = _tool_error.get()
+        if recorded and recorded[0] == result:
+            # Newer SDKs withhold the exception text from the model-facing
+            # string; the formatter patch still saw the exception itself.
+            return recorded[2] or result, recorded[1]
+        message = result[len(_TOOL_ERROR_PREFIX) :]
+        message = message.replace("Please try again. Error:", "").strip()
+        return message or result, None
+    if result.startswith(_TOOL_TIMEOUT_RE[0]) and _TOOL_TIMEOUT_RE[1] in result:
+        return result, "TimeoutError"
+    return None
+
+
 def _guardrail_name(guardrail: Any) -> str:
     """Best-effort display name for an Input/OutputGuardrail instance."""
     try:
@@ -338,7 +439,9 @@ def _build_av_run_hooks() -> Any:
             root_span: SpanData,
             current_agent_holder: dict[str, str | None],
             user_hooks: Any | None,
+            run_config: Any | None = None,
         ) -> None:
+            self._run_config = run_config
             self._state = state
             self._root = root_span
             self._current_agent = current_agent_holder
@@ -418,13 +521,20 @@ def _build_av_run_hooks() -> Any:
                 # (the server classifies SpanType.AGENT → CanonicalRole.AGENT and
                 # counts it as a distinct sub-agent). Without this, handoff
                 # targets only appear as agent_name labels on LLM spans.
+                prev_agent_span = self._current_agent_span
                 self._supersede_current_agent()
                 start_mono = time.monotonic()
                 agent_span = SpanData(
                     trace_id=self._state.trace_id,
                     type=SpanType.AGENT,
                     name=str(to_name) if to_name else "agent",
-                    parent_span_id=self._root.span_id,
+                    # AID-05: the target is a sub-agent of the agent that handed
+                    # off to it, not a sibling under the root.
+                    parent_span_id=(
+                        self._root.span_id
+                        if identity_legacy()
+                        else prev_agent_span.span_id
+                    ),
                     metadata={"agent_name": to_name, "askl_handoff_from": from_name},
                 )
                 self._state.completed_spans.append(agent_span)
@@ -443,13 +553,7 @@ def _build_av_run_hooks() -> Any:
         ) -> None:
             try:
                 start_mono = time.monotonic()
-                model = None
-                try:
-                    model = getattr(agent, "model", None)
-                    if model is not None and not isinstance(model, str):
-                        model = getattr(model, "model", None) or str(model)
-                except Exception:  # noqa: BLE001
-                    model = None
+                model = _resolve_model_name(agent, self._run_config)
 
                 span = SpanData(
                     trace_id=self._state.trace_id,
@@ -592,7 +696,16 @@ def _build_av_run_hooks() -> Any:
                 span, start_mono, _input = started
                 if result is not None:
                     span.output_data = _safe_json(result)
-                _finalize_span(span, start_mono)
+                failure = _tool_failure(result)
+                if failure is not None:
+                    err_msg, exc_type = failure
+                    _finalize_span(
+                        span, start_mono, status="failed", error_message=err_msg
+                    )
+                    if exc_type:
+                        span.exception_type = exc_type
+                else:
+                    _finalize_span(span, start_mono)
                 self._state.completed_spans.append(span)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("morse_ai: on_tool_end swallowed: %s", exc)
@@ -606,10 +719,13 @@ def _merge_hooks(
     root_span: SpanData,
     current_agent_holder: dict[str, str | None],
     user_hooks: Any | None,
+    run_config: Any | None = None,
 ) -> Any:
     """Build the Morse RunHooks instance for one Runner.run() call."""
     HooksCls = _build_av_run_hooks()
-    return HooksCls(state, root_span, current_agent_holder, user_hooks)
+    return HooksCls(
+        state, root_span, current_agent_holder, user_hooks, run_config=run_config
+    )
 
 
 def _attach_run_metadata(
@@ -734,6 +850,8 @@ def _prepare_call(
         # No active trace — create one rooted at the agent name.
         agent_name = getattr(starting_agent, "name", None)
         auto_run_cm = _av_run(agent_name)
+        if agent_name:
+            auto_run_cm._identity_source = "framework"  # AID-01: the root agent
         auto_run_cm.__enter__()
         state = get_active_trace()
     assert state is not None
@@ -745,6 +863,10 @@ def _prepare_call(
     if guardrail_parent is not None and guardrail_parent.trace_id == state.trace_id:
         root_span = guardrail_parent
     else:
+        # AID-04: ``run("app")`` around this app must not fork a second agent:
+        # the starting agent keeps the identity and the run name becomes the
+        # ``morse.app`` label. Only the outermost run adopts (idempotent).
+        adopt_native_root(state, getattr(starting_agent, "name", None))
         # The active trace's top-of-stack span is the run's root agent span.
         root_span = state.span_stack[-1] if state.span_stack else None
     if root_span is None:
@@ -763,7 +885,13 @@ def _prepare_call(
         "name": getattr(starting_agent, "name", None)
     }
     user_hooks = kwargs.get("hooks")
-    av_hooks = _merge_hooks(state, root_span, current_agent_holder, user_hooks)
+    av_hooks = _merge_hooks(
+        state,
+        root_span,
+        current_agent_holder,
+        user_hooks,
+        run_config=kwargs.get("run_config"),
+    )
     kwargs["hooks"] = av_hooks
     return state, current_agent_holder, auto_run_cm, root_span, av_hooks
 
@@ -794,21 +922,21 @@ def _wrap_stream_events_for_close(
                 pass
         return
 
-    def _close() -> None:
+    def _close(exc: BaseException | None = None) -> None:
         av_hooks.finalize_open_agents()
         _finalize_root_with_output(root_span, starting_agent, result)
-        if auto_run_cm is not None:
-            try:  # noqa: SIM105
-                auto_run_cm.__exit__(None, None, None)
-            except Exception:  # noqa: BLE001
-                pass
+        _exit_auto_run(auto_run_cm, exc)
 
     async def _wrapped_stream_events():
+        failure: BaseException | None = None
         try:
             async for event in original_stream_events():
                 yield event
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
-            _close()
+            _close(failure)
 
     result.stream_events = _wrapped_stream_events
 
@@ -843,17 +971,18 @@ def _traced_runner_call(
     if awaitable:
 
         async def _run_async():
+            failure: BaseException | None = None
             try:
                 result = await original(starting_agent, input, *args, **kwargs)
                 av_hooks.finalize_open_agents()
                 _finalize_root_with_output(root_span, starting_agent, result)
                 return result
+            except BaseException as exc:
+                failure = exc
+                av_hooks.finalize_open_agents()
+                raise
             finally:
-                if auto_run_cm is not None:
-                    try:  # noqa: SIM105
-                        auto_run_cm.__exit__(None, None, None)
-                    except Exception:  # noqa: BLE001
-                        pass
+                _exit_auto_run(auto_run_cm, failure)
                 clear_active_framework()
 
         return _run_async()
@@ -861,12 +990,9 @@ def _traced_runner_call(
     # Sync path (run_sync OR run_streamed — both return synchronously).
     try:
         result = original(starting_agent, input, *args, **kwargs)
-    except BaseException:
-        if auto_run_cm is not None:
-            try:  # noqa: SIM105
-                auto_run_cm.__exit__(None, None, None)
-            except Exception:  # noqa: BLE001
-                pass
+    except BaseException as exc:
+        av_hooks.finalize_open_agents()
+        _exit_auto_run(auto_run_cm, exc)
         clear_active_framework()
         raise
 
@@ -883,13 +1009,50 @@ def _traced_runner_call(
 
     av_hooks.finalize_open_agents()
     _finalize_root_with_output(root_span, starting_agent, result)
-    if auto_run_cm is not None:
-        try:  # noqa: SIM105
-            auto_run_cm.__exit__(None, None, None)
-        except Exception:  # noqa: BLE001
-            pass
+    _exit_auto_run(auto_run_cm)
     clear_active_framework()
     return result
+
+
+def _install_tool_error_patch() -> None:
+    """Remember the exception class behind the SDK's default tool-error string.
+
+    The formatted string is all `on_tool_end` receives; the class is gone by
+    then. Best-effort: if this SDK version resolves the formatter differently
+    the message is still recorded, just without ``exception_type``.
+    """
+    global _original_default_tool_error_function
+    try:
+        import agents.tool as agents_tool  # type: ignore[import-not-found]
+
+        original = agents_tool.default_tool_error_function
+    except (ImportError, AttributeError):
+        return
+    if _original_default_tool_error_function is not None:
+        return
+
+    def traced_default_tool_error_function(ctx, error):
+        formatted = original(ctx, error)
+        with contextlib.suppress(Exception):
+            from morse_ai.tracing import exception_type_name
+
+            _tool_error.set((formatted, exception_type_name(error), str(error)))
+        return formatted
+
+    traced_default_tool_error_function.__wrapped__ = original  # type: ignore[attr-defined]
+    _original_default_tool_error_function = original
+    agents_tool.default_tool_error_function = traced_default_tool_error_function
+
+
+def _uninstall_tool_error_patch() -> None:
+    global _original_default_tool_error_function
+    if _original_default_tool_error_function is None:
+        return
+    with contextlib.suppress(Exception):
+        import agents.tool as agents_tool  # type: ignore[import-not-found]
+
+        agents_tool.default_tool_error_function = _original_default_tool_error_function
+    _original_default_tool_error_function = None
 
 
 def _install_guardrail_patches() -> None:
@@ -1003,6 +1166,7 @@ def install() -> bool:
         _original_run_streamed = None
 
     _install_guardrail_patches()
+    _install_tool_error_patch()
 
     setattr(agents, _INSTALL_FLAG, True)
     logger.info("morse_ai: OpenAI Agents adapter installed")
@@ -1050,5 +1214,6 @@ def uninstall() -> None:
         _original_run_streamed = None
 
     _uninstall_guardrail_patches()
+    _uninstall_tool_error_patch()
 
     setattr(agents, _INSTALL_FLAG, False)

@@ -15,6 +15,7 @@ class SpanType(StrEnum):
     TOOL = "tool"
     HTTP = "http"
     DB = "db"
+    QUEUE = "queue"
     CUSTOM = "custom"
     MEMORY = "memory"
     RETRIEVER = "retriever"

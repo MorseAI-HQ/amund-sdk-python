@@ -11,6 +11,9 @@ First non-empty wins:
      ``OTEL_RESOURCE_ATTRIBUTES``)
   4. entry-script stem (``sys.argv[0]`` or ``__main__`` spec name)
   5. the literal ``"default-agent"``
+
+AID-01 (agent-identity-v2) keeps this ladder and records which tier won as
+``identity_source`` so the server can flag guessed (entry-script) names.
 """
 
 from __future__ import annotations
@@ -82,17 +85,45 @@ def entry_script_stem() -> str | None:
     return None
 
 
-def resolve_agent_name(explicit: str | None, framework: str | None = None) -> str:
-    """Resolve the agent name for a trace. See module docstring for tiers.
+def identity_legacy() -> bool:
+    """AID-09: ``MORSE_AGENT_IDENTITY=legacy`` restores pre-v2 naming/shape.
+
+    Read lazily so a test or a late ``os.environ`` edit takes effect.
+    """
+    return os.environ.get("MORSE_AGENT_IDENTITY", "").strip().lower() == "legacy"
+
+
+# AID-01 identity_source values. Only ``entry_script`` (and ``default``) mean
+# "the SDK guessed"; the Agents table prompts a rename for those.
+SOURCE_RUN = "run"
+SOURCE_FRAMEWORK = "framework"
+SOURCE_SERVICE = "service_name"
+SOURCE_ENTRY = "entry_script"
+SOURCE_DEFAULT = "default"
+# Sources a discovered framework root may replace (AID-01 ladder).
+GUESSED_SOURCES = frozenset({SOURCE_SERVICE, SOURCE_ENTRY, SOURCE_DEFAULT})
+
+
+def resolve_agent_identity(
+    explicit: str | None, framework: str | None = None
+) -> tuple[str, str]:
+    """AID-01 ladder: ``(name, identity_source)``. See module docstring tiers.
 
     ``framework`` is the framework-native name (e.g. an OpenAI Agents starting
     ``Agent.name`` or a LangGraph graph name), already filtered of generic
     defaults by the caller.
     """
-    return (
-        _clean(explicit)
-        or _clean(framework)
-        or env_service_name()
-        or entry_script_stem()
-        or DEFAULT_AGENT_NAME
-    )
+    if name := _clean(explicit):
+        return name, SOURCE_RUN
+    if name := _clean(framework):
+        return name, SOURCE_FRAMEWORK
+    if name := env_service_name():
+        return name, SOURCE_SERVICE
+    if name := entry_script_stem():
+        return name, SOURCE_ENTRY
+    return DEFAULT_AGENT_NAME, SOURCE_DEFAULT
+
+
+def resolve_agent_name(explicit: str | None, framework: str | None = None) -> str:
+    """Name half of :func:`resolve_agent_identity`."""
+    return resolve_agent_identity(explicit, framework)[0]

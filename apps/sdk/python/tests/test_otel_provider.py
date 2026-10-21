@@ -340,3 +340,63 @@ def test_spans_carry_the_sdk_version_on_the_instrumentation_scope(engine):
 
     scope = _spans_for(engine, trace_id)[0].instrumentation_scope
     assert (scope.name, scope.version) == ("morse_ai", __version__)
+
+
+def _mk_span(span_id: str, parent: str | None, name: str, trace_id: str) -> dict:
+    return {
+        "span_id": span_id,
+        "trace_id": trace_id,
+        "parent_span_id": parent,
+        "type": "agent",
+        "name": name,
+        "status": "completed",
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "ended_at": "2026-01-01T00:00:01+00:00",
+        "duration_ms": 1000,
+    }
+
+
+@pytest.mark.req("MHQ-1412")
+def test_children_ending_before_their_parent_keep_their_parent_link(engine):
+    """MHQ-1412: spans arrive in completion order (child before parent). The
+    replay must still parent each span on its real parent, not on the synthetic
+    0x1 placeholder that is stored as 0000...0001."""
+    trace_id = uuid.uuid4().hex
+    root, chain, prompt, llm = (uuid.uuid4().hex[:16] for _ in range(4))
+    entry = {
+        "trace": {
+            "trace_id": trace_id,
+            "agent": "lcel",
+            "status": "completed",
+            "started_at": "2026-01-01T00:00:00+00:00",
+        },
+        # completion order: leaves first, root last
+        "spans": [
+            _mk_span(prompt, chain, "ChatPromptTemplate", trace_id),
+            _mk_span(llm, chain, "ChatOpenAI", trace_id),
+            _mk_span(chain, root, "chain", trace_id),
+            _mk_span(root, None, "root", trace_id),
+        ],
+    }
+    emit_trace_entry(entry)
+    engine.flush()
+
+    by_name = {s.name: s for s in _spans_for(engine, trace_id)}
+    chain_id = by_name["chain"].context.span_id
+    assert by_name["chain"].parent.span_id == by_name["root"].context.span_id
+    assert by_name["ChatPromptTemplate"].parent.span_id == chain_id
+    assert by_name["ChatOpenAI"].parent.span_id == chain_id
+
+
+@pytest.mark.req("MHQ-1412")
+def test_parents_first_orders_parents_ahead_and_survives_cycles():
+    from morse_ai.otel_provider import _parents_first
+
+    a = {"span_id": "a", "parent_span_id": "b"}
+    b = {"span_id": "b", "parent_span_id": "a"}  # cycle
+    orphan = {"span_id": "c", "parent_span_id": "missing"}
+    out = _parents_first([a, b, orphan], None)
+    assert {id(x) for x in out} == {id(a), id(b), id(orphan)}
+    kid = {"span_id": "k", "parent_span_id": "p"}
+    par = {"span_id": "p", "parent_span_id": None}
+    assert _parents_first([kid, par], "p") == [par, kid]

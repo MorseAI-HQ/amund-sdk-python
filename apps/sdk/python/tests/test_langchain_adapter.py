@@ -46,6 +46,7 @@ def _tool_serialized(name: str = "my_tool") -> dict:
 
 
 @pytest.mark.req("SDK-09")
+@pytest.mark.usefixtures("legacy_identity")  # pins the pre-v2 chain-is-agent shape
 def test_chain_start_end_creates_agent_span():
     """Handler creates an agent-typed span for chain start/end."""
     handler = MorseCallbackHandler("test-agent")
@@ -149,6 +150,7 @@ def test_handler_restores_parent_trace_after_contextvar_loss():
 
 
 @pytest.mark.req("SDK-09")
+@pytest.mark.usefixtures("legacy_identity")  # pins the pre-v2 chain-is-agent shape
 def test_handler_reuse_after_parent_trace_close_starts_new_trace():
     """A stale captured parent state is not reused after its span stack closes."""
     with tracing.run("parent-agent"):
@@ -194,6 +196,7 @@ def test_tool_span_captures_io():
 
 
 @pytest.mark.req("SDK-09")
+@pytest.mark.usefixtures("legacy_identity")  # pins the pre-v2 chain-is-agent shape
 def test_error_sets_failed_status():
     """on_chain_error closes span with failed status and error_message."""
     handler = MorseCallbackHandler("test-agent")
@@ -251,6 +254,7 @@ def test_llm_error_sets_failed_status():
 
 
 @pytest.mark.req("SDK-09")
+@pytest.mark.usefixtures("legacy_identity")  # pins the pre-v2 chain-is-agent shape
 def test_auto_trace_creation():
     """Handler auto-creates a trace context when none exists."""
     # Reset last trace so we can tell this one is new
@@ -323,6 +327,7 @@ def test_graceful_fallback_when_no_langchain():
 
 
 @pytest.mark.req("SDK-09")
+@pytest.mark.usefixtures("legacy_identity")  # pins the pre-v2 chain-is-agent shape
 def test_callbacks_tolerate_none_serialized():
     """LangChain passes ``serialized=None`` for some Runnable graphs in newer
     langchain_core releases. The handler must NOT raise into the host app —
@@ -522,3 +527,86 @@ def test_langgraph_thread_id_from_run_metadata_lands_on_the_trace():
     handler.on_chain_end({"messages": []}, run_id=run_id)
 
     assert tracing._get_last_trace()["trace"]["thread_id"] == "conv-77"
+
+
+# ---------------------------------------------------------------------------
+# MHQ-1412 — LCEL nesting + framework from non-chain callbacks
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.req("MHQ-1412")
+@pytest.mark.usefixtures("legacy_identity")  # pins the pre-v2 chain-is-agent shape
+def test_lcel_prompt_llm_parser_nests_under_the_enclosing_chain():
+    pytest.importorskip("langchain_core")
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+    from langchain_core.output_parsers import StrOutputParser
+    from langchain_core.prompts import ChatPromptTemplate
+
+    handler = MorseCallbackHandler("lcel")
+    chain = (
+        ChatPromptTemplate.from_template("Summarize {t}")
+        | FakeListChatModel(responses=["ok"])
+        | StrOutputParser()
+    ).with_config(callbacks=[handler])
+    with tracing.run("lcel-run"):
+        chain.invoke({"t": "x"})
+
+    spans = tracing._get_last_trace()["spans"]
+    root = next(s for s in spans if s["name"] == "lcel-run")
+    seq = next(s for s in spans if s.get("parent_span_id") == root["span_id"])
+    children = [s for s in spans if s.get("parent_span_id") == seq["span_id"]]
+    assert {c["name"] for c in children} == {
+        "ChatPromptTemplate",
+        "FakeListChatModel",
+        "chain",
+    }
+
+
+@pytest.mark.req("MHQ-1412")
+@pytest.mark.usefixtures("legacy_identity")  # pins the pre-v2 chain-is-agent shape
+def test_retriever_chain_nests_retriever_under_the_chain():
+    pytest.importorskip("langchain_core")
+    from langchain_core.documents import Document
+    from langchain_core.retrievers import BaseRetriever
+    from langchain_core.runnables import RunnableLambda
+
+    class _Retriever(BaseRetriever):
+        def _get_relevant_documents(self, query, *, run_manager=None):
+            return [Document(page_content="doc", metadata={"source": "s"})]
+
+    handler = MorseCallbackHandler("rag")
+    chain = (
+        {"ctx": _Retriever(), "q": RunnableLambda(lambda q: q)}
+        | RunnableLambda(lambda d: f"{d['q']}:{len(d['ctx'])}")
+    ).with_config(callbacks=[handler])
+    with tracing.run("rag-run"):
+        chain.invoke("hi")
+
+    spans = tracing._get_last_trace()["spans"]
+    by_id = {s["span_id"]: s for s in spans}
+    retriever = next(s for s in spans if s["type"] == "retriever")
+    parent = by_id[retriever["parent_span_id"]]
+    assert parent["type"] == "agent" and parent["name"] != "rag-run"
+
+
+@pytest.mark.req("MHQ-1412")
+def test_framework_is_set_by_llm_callbacks_without_any_chain():
+    from morse_ai._internal.active_framework import get_active_framework
+
+    handler = MorseCallbackHandler("llm-only")
+    run_id = uuid.uuid4()
+    handler.on_llm_start({"id": ["FakeLLM"]}, ["q"], run_id=run_id)
+    handler.on_llm_end(MockLLMResult("a"), run_id=run_id)
+
+    assert tracing._get_last_trace()["resource"]["morse_ai.framework"] == "langchain"
+    assert get_active_framework() is None  # released: no leak into later traces
+
+
+@pytest.mark.req("MHQ-1412")
+def test_framework_is_set_by_tool_callbacks_without_any_chain():
+    handler = MorseCallbackHandler("tool-only")
+    run_id = uuid.uuid4()
+    handler.on_tool_start(_tool_serialized(), "in", run_id=run_id)
+    handler.on_tool_end("out", run_id=run_id)
+
+    assert tracing._get_last_trace()["resource"]["morse_ai.framework"] == "langchain"

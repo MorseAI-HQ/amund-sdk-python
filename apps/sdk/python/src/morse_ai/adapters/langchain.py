@@ -58,12 +58,17 @@ from morse_ai._internal.active_framework import (  # noqa: E402
     clear_active_framework,
     set_active_framework,
 )
-from morse_ai._internal.agent_name import resolve_agent_name  # noqa: E402
+from morse_ai._internal.agent_name import (  # noqa: E402
+    identity_legacy,
+    resolve_agent_identity,
+)
 from morse_ai.adapters._retrieval import build_documents  # noqa: E402
+from morse_ai.spans import SpanType  # noqa: E402
 from morse_ai.tracing import (  # noqa: E402
     TracedRun,
     TracedSpan,
     _active_trace,
+    adopt_native_root,
     adopt_thread_id,
     get_active_trace,
     run,
@@ -79,6 +84,41 @@ if TYPE_CHECKING:
 _FRAMEWORK_NAME_LANGCHAIN = "langchain"
 
 __all__ = ["MorseCallbackHandler"]
+
+# AID-01: compiled-graph / runnable names that are framework defaults, not an
+# app's identity. Never a "framework-native root name".
+_GENERIC_ROOT_NAMES = frozenset(
+    {
+        "langgraph",
+        "langchain-agent",
+        "chain",
+        "agentexecutor",
+        "runnable",
+        "runnablesequence",
+        "runnablelambda",
+        "runnableparallel",
+    }
+)
+
+# AID-02: nodes that are framework plumbing even when they call a model
+# (prebuilt ReAct ``agent``/``tools``). They stay spans; their LLM call belongs
+# to the nearest real node, else the root agent.
+_NO_PROMOTE_NODES = frozenset(
+    {"__start__", "__end__", "chain", "tools", "agent", "model", "route"}
+    | _GENERIC_ROOT_NAMES
+)
+
+
+def _native_root_name(serialized: Any, kwargs: dict[str, Any]) -> str | None:
+    """Name the framework gave the root runnable, unless it is a default."""
+    for cand in (kwargs.get("name"), (serialized or {}).get("name")):
+        if (
+            isinstance(cand, str)
+            and cand.strip()
+            and cand.strip().lower() not in _GENERIC_ROOT_NAMES
+        ):
+            return cand.strip()
+    return None
 
 
 def _extract_token_usage(
@@ -209,6 +249,10 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
         super().__init__()
         # MHQ-1100: None = not explicit; resolved per trace (see
         # morse_ai._internal.agent_name.resolve_agent_name).
+        # MHQ-1412 (documented behaviour, not a bug): ``agent_name`` only names
+        # a trace this handler creates itself. Inside an enclosing
+        # ``morse_ai.run("name")`` the run's name wins and this argument is
+        # ignored, because the handler never opens a trace of its own there.
         self.agent_name = agent_name
         # Framework-native name learned from callbacks (e.g. graph name).
         self._native_name: str | None = None
@@ -233,10 +277,122 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
         # each execution step. Track all root run IDs so we don't close the
         # auto-trace until every root step has finished.
         self._root_run_ids: set[str] = set()
+        # AID-05: span ownership by LangChain run id. Parents come from the
+        # callback's ``parent_run_id`` tree, never from the shared stack top,
+        # which parallel branches and async tasks interleave.
+        self._span_ids: dict[str, str] = {}
+        self._claimed_roots: set[str] = set()
+        self._run_parents: dict[str, str | None] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _new_run(self, **kwargs: Any) -> TracedRun:
+        """Build the auto-trace ``run()``, recording which ladder tier named it."""
+        name, source = resolve_agent_identity(self.agent_name, self._native_name)
+        traced_run = run(name, **kwargs)
+        traced_run._identity_source = source
+        return traced_run
+
+    def _root_native_name(self, serialized: Any, kwargs: dict[str, Any]) -> str | None:
+        return _native_root_name(serialized, kwargs)
+
+    def _parent_span_for(self, parent_run_id: UUID | None) -> str | None:
+        """Span id of the nearest tracked ancestor run, else None (stack top)."""
+        if identity_legacy():
+            return None
+        key = str(parent_run_id) if parent_run_id is not None else None
+        for _ in range(64):
+            if key is None:
+                return None
+            if key in self._span_ids:
+                return self._span_ids[key]
+            key = self._run_parents.get(key)
+        return None
+
+    def _claim_root(
+        self,
+        run_id: UUID,
+        serialized: Any,
+        kwargs: dict[str, Any],
+        name: str,
+        inputs: Any = None,
+    ) -> bool:
+        """AID-01/04: the first root run IS the trace's root agent, not a child.
+
+        The framework's own root name (graph name, ``run_name``) names the agent
+        (or becomes the agent while an explicit ``run("app")`` name turns into
+        the ``morse.app`` label). No extra agent span is emitted for it.
+        """
+        if identity_legacy() or self._chain_kind(name, kwargs) == "node":
+            return False
+        self._ensure_trace()
+        state = get_active_trace()
+        if state is None or state.root_adopted or not state.span_stack:
+            return False
+        # A name the customer gave this handler for the trace it opened itself
+        # is explicit and is not re-derived from the graph.
+        own_explicit = self._auto_trace and bool(self.agent_name)
+        adopt_native_root(
+            state, None if own_explicit else self._root_native_name(serialized, kwargs)
+        )
+        root = state.span_stack[0]
+        self._span_ids[str(run_id)] = root.span_id
+        self._run_parents[str(run_id)] = None
+        self._claimed_roots.add(str(run_id))
+        if root.input_data is None:
+            wrapped = self._ensure_dict(inputs)
+            if wrapped is not None:
+                root.input_data = wrapped
+        return True
+
+    def _finish_claimed_root(
+        self, run_id: UUID, outputs: Any = None, error: BaseException | None = None
+    ) -> None:
+        """The claimed root has no span of its own: record its IO/error on the
+        trace's root span instead."""
+        if str(run_id) not in self._claimed_roots:
+            return
+        self._claimed_roots.discard(str(run_id))
+        state = get_active_trace() or self._inherited_trace_state
+        root = state.span_stack[0] if state is not None and state.span_stack else None
+        if root is None:
+            return
+        if error is not None:
+            from morse_ai.tracing import exception_type_name
+
+            root.exception_type = root.exception_type or exception_type_name(error)
+        elif root.output_data is None:
+            wrapped = self._ensure_dict(outputs)
+            if wrapped is not None:
+                root.output_data = wrapped
+
+    def _chain_kind(self, name: str, kwargs: dict[str, Any]) -> str:  # noqa: ARG002
+        """AID-02: how a non-root chain is recorded (``chain`` or ``node``)."""
+        return "chain"
+
+    def _promote_owner(self, parent_run_id: UUID | None) -> None:
+        """AID-02: a node that owns an LLM call is a real role, so it is an agent.
+
+        Walks up from the LLM call to the nearest node that is not framework
+        plumbing and retypes it. Nodes that never call a model stay spans.
+        """
+        key = str(parent_run_id) if parent_run_id is not None else None
+        for _ in range(64):
+            if key is None:
+                return
+            traced = self._span_stack.get(key)
+            sp = traced._span if traced is not None else None
+            md = (sp.metadata or {}) if sp is not None else {}
+            if (
+                sp is not None
+                and md.get("node_kind") == "node"
+                and sp.name.lower() not in _NO_PROMOTE_NODES
+            ):
+                sp.type = SpanType.AGENT
+                return
+            key = self._run_parents.get(key)
 
     def _ensure_trace(self) -> None:
         """Auto-create a trace if no active trace exists."""
@@ -251,9 +407,7 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
         if self._restore_inherited_trace():
             return
         if self._run_context is None:
-            self._run_context = run(
-                resolve_agent_name(self.agent_name, self._native_name)
-            )
+            self._run_context = self._new_run()
             self._run_context.__enter__()
             self._auto_trace = True
         else:
@@ -291,6 +445,9 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
             self._run_context.__exit__(None, None, None)
             self._run_context = None
             self._auto_trace = False
+        if not self._span_stack and not self._root_run_ids:
+            self._span_ids.clear()
+            self._run_parents.clear()
 
     @staticmethod
     def _ensure_dict(data: Any) -> dict | None:
@@ -394,13 +551,49 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
         return coerced
 
     def _open_span(
-        self, run_id: UUID, name: str, span_type: str, input_data: Any = None
+        self,
+        run_id: UUID,
+        name: str,
+        span_type: str,
+        input_data: Any = None,
+        parent_run_id: UUID | None = None,
+        kind: str | None = None,
     ) -> TracedSpan | None:
-        """Create and enter a new child span, store in _span_stack."""
+        """Create and enter a new child span, store in _span_stack.
+
+        ``kind`` marks an AID-02 chain/node span (framework bookkeeping, not an
+        agent); it is recorded as span metadata ``node_kind``.
+        """
+        # MHQ-1412: framework used to be set only in on_chain_start, so traces
+        # made of llm/tool/retriever callbacks alone had framework NULL. Chains
+        # keep their own accounting (on_chain_start/end); other starts are
+        # counted here and released in _close_span. Set before AND after
+        # _ensure_trace: the first is read by a trace the handler creates, the
+        # second stamps an already-open trace's state.
+        marks_framework = span_type != "agent" and kind is None
+        if marks_framework:
+            set_active_framework(self._framework_name)
         self._ensure_trace()
-        traced = span(name, span_type=span_type)
+        if marks_framework:
+            set_active_framework(self._framework_name)
+        traced = span(
+            name,
+            span_type=span_type,
+            parent_span_id=self._parent_span_for(parent_run_id),
+        )
         traced.__enter__()
         if traced._active and traced._span is not None:
+            traced._marks_framework = marks_framework  # type: ignore[attr-defined]
+            if marks_framework:
+                self._fw_set_depth += 1
+            self._span_ids[str(run_id)] = traced._span.span_id
+            self._run_parents[str(run_id)] = (
+                str(parent_run_id) if parent_run_id is not None else None
+            )
+            if kind is not None:
+                traced.set_metadata("node_kind", kind)
+            if span_type == "llm":
+                self._promote_owner(parent_run_id)
             wrapped = self._ensure_dict(input_data)
             if wrapped is not None:
                 traced._span.input_data = wrapped
@@ -417,6 +610,10 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
         traced = self._span_stack.pop(key, None)
         if traced is None:
             return
+        if getattr(traced, "_marks_framework", False):
+            self._fw_set_depth = max(0, self._fw_set_depth - 1)
+            if self._fw_set_depth == 0:
+                clear_active_framework()
         if traced._active and traced._span is not None and output_data is not None:
             wrapped = self._ensure_dict(output_data)
             if wrapped is not None:
@@ -466,12 +663,22 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
             # TypedDict LangGraph state surfaces on the span instead of being
             # silently dropped to None (the prior strict-isinstance check was
             # the root cause of "many LangGraph nodes show input/output null").
-            self._open_span(
-                run_id,
-                str(chain_name),
-                span_type="agent",
-                input_data=inputs,
-            )
+            claimed = False
+            if parent_run_id is None:
+                self._native_name = self._root_native_name(serialized, kwargs)
+                claimed = self._claim_root(
+                    run_id, serialized, kwargs, str(chain_name), inputs
+                )
+            if not claimed:
+                legacy = identity_legacy()
+                self._open_span(
+                    run_id,
+                    str(chain_name),
+                    span_type="agent" if legacy else "custom",
+                    input_data=inputs,
+                    parent_run_id=parent_run_id,
+                    kind=None if legacy else self._chain_kind(str(chain_name), kwargs),
+                )
             # MHQ-1022: LangGraph copies ``configurable.thread_id`` onto the
             # run metadata, which is the only place a checkpointed
             # conversation's identity reaches a callback handler.
@@ -492,6 +699,7 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         try:
+            self._finish_claimed_root(run_id, outputs=outputs)
             self._close_span(run_id, output_data=outputs)
             self._root_run_ids.discard(str(run_id))
             self._maybe_close_auto_trace()
@@ -511,6 +719,7 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         try:
+            self._finish_claimed_root(run_id, error=error)
             self._close_span(run_id, error=error)
             self._root_run_ids.discard(str(run_id))
             self._maybe_close_auto_trace(error=error)
@@ -554,6 +763,7 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
                 str(llm_name),
                 span_type="llm",
                 input_data={"prompts": prompts} if prompts else None,
+                parent_run_id=parent_run_id,
             )
             if (
                 traced is not None
@@ -703,7 +913,9 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
                 tool_name = id_path[-1]
             if not tool_name:
                 tool_name = "tool"
-            self._open_span_tool_input(run_id, str(tool_name), input_str)
+            self._open_span_tool_input(
+                run_id, str(tool_name), input_str, parent_run_id=parent_run_id
+            )
         except Exception as exc:  # noqa: BLE001
             logger.debug(
                 "morse_ai: MorseCallbackHandler.on_tool_start swallowed: %s",
@@ -711,13 +923,18 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
             )
 
     def _open_span_tool_input(
-        self, run_id: UUID, tool_name: str, input_str: str
+        self,
+        run_id: UUID,
+        tool_name: str,
+        input_str: str,
+        parent_run_id: UUID | None = None,
     ) -> None:
         self._open_span(
             run_id,
             tool_name,
             span_type="tool",
             input_data={"input": input_str},
+            parent_run_id=parent_run_id,
         )
 
     def on_tool_end(
@@ -774,6 +991,7 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
                 str(retriever_name),
                 span_type="retriever",
                 input_data={"query": query},
+                parent_run_id=parent_run_id,
             )
         except Exception as exc:  # noqa: BLE001
             logger.debug("morse_ai: on_retriever_start swallowed: %s", exc)
