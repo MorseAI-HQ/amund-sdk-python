@@ -11,6 +11,18 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ## [0.8.0] — Unreleased
 
+### Fixed — Anthropic streaming is traced (MHQ-1415)
+
+- **`messages.stream()` now records an `llm` span**, sync and async, under both zero-code
+  instrumentation and `wrap()`. It previously recorded nothing: `stream()` sends its own request
+  and never calls `create()`. The span is written when the `with` block ends, from the SDK's own
+  accumulated message, so model, tokens, cache tokens, cost and output are all present.
+- **`messages.create(stream=True)` records model, tokens and cost.** Usage is rebuilt from the
+  `message_start` and `message_delta` events instead of producing a span with all of them empty.
+- Streamed spans carry `metadata.streamed = true`. A stream the caller stops reading early is kept
+  and marked `metadata.stream_incomplete = true` (output tokens are partial); an exception inside
+  the stream records the span as `failed` with the error.
+
 ### Changed — behaviour change, default-on (agent-identity-v2, MHQ-1408)
 
 Set `MORSE_AGENT_IDENTITY=legacy` to restore the previous naming and span shape.

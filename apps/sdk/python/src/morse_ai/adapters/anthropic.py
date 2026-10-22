@@ -51,6 +51,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from morse_ai._internal.active_framework import (
@@ -88,6 +89,8 @@ _INSTALL_FLAG = "_morse_ai_installed"
 # Cached references to the originals so uninstall() can restore them.
 _original_create = None
 _original_acreate = None
+_original_stream = None
+_original_astream = None
 
 # Per-segment content cap (bytes). Anything beyond is truncated and
 # `content_truncated=True` is set so the server still has the prefix for
@@ -752,6 +755,9 @@ def _record_llm_span_for_response(
     *,
     summarize_override: bool = False,
     started_at_iso: str | None = None,
+    status: str = "completed",
+    error_message: str | None = None,
+    extra_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Build an `llm` span from the response and append it to the active trace.
 
@@ -816,10 +822,12 @@ def _record_llm_span_for_response(
             if span.metadata is None:
                 span.metadata = {}
             span.metadata["context_composition"] = composition
+        if extra_metadata:
+            span.metadata = {**(span.metadata or {}), **extra_metadata}
 
         if started_at_iso:
             span.started_at = started_at_iso
-        _finalize_span(span, start_mono)
+        _finalize_span(span, start_mono, status=status, error_message=error_message)
         state.completed_spans.append(span)
 
         # MEM-11: emit sibling memory span when EITHER:
@@ -834,6 +842,326 @@ def _record_llm_span_for_response(
             )
     except Exception as exc:  # noqa: BLE001 — keep recorder non-invasive
         logger.debug("morse_ai: anthropic span recording swallowed error: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Streaming (MHQ-1415): messages.stream() and create(stream=True)
+# ---------------------------------------------------------------------------
+#
+# Neither path goes through Messages.create's return value: stream() posts the
+# request itself, and create(stream=True) returns an event iterator. Both are
+# wrapped so one llm span is recorded when the stream ends, from the finished
+# message (stream()) or from usage rebuilt out of the raw events (create).
+
+_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+
+
+def _record_stream_span(
+    name: str,
+    message: Any,
+    *,
+    kwargs: dict[str, Any],
+    start_mono: float,
+    started_at_iso: str,
+    summarize_override: bool,
+    error: BaseException | None,
+) -> None:
+    """Record the llm span for one finished (or abandoned / failed) stream."""
+    complete = message is not None and getattr(message, "stop_reason", None) is not None
+    extra: dict[str, Any] = {"streamed": True}
+    if error is None and not complete:
+        # Consumer stopped reading before the final event: output tokens are partial.
+        extra["stream_incomplete"] = True
+
+    def _record() -> None:
+        _record_llm_span_for_response(
+            name,
+            message,
+            start_mono,
+            kwargs,
+            summarize_override=summarize_override,
+            started_at_iso=started_at_iso,
+            status="failed" if error is not None else "completed",
+            error_message=f"{type(error).__name__}: {error}"
+            if error is not None
+            else None,
+            extra_metadata=extra,
+        )
+
+    set_active_framework(_FRAMEWORK_NAME)
+    try:
+        if get_active_trace() is not None:
+            _record()
+        else:
+            # ponytail: the auto-trace opens at record time, so its own start is the
+            # stream's end; the llm span keeps the real start. Keep the trace open
+            # across the stream only if trace-level timing turns out to matter.
+            with _av_run(name):
+                _record()
+    except Exception as exc:  # noqa: BLE001 — never break the customer's stream
+        logger.debug("morse_ai: anthropic stream span recording failed: %s", exc)
+    finally:
+        clear_active_framework()
+
+
+class _StreamSpanState:
+    """Call-time bookkeeping shared by every stream wrapper; records once."""
+
+    def __init__(
+        self, name: str, kwargs: dict[str, Any], summarize_override: bool
+    ) -> None:
+        self.name = name
+        self.kwargs = kwargs
+        self.summarize_override = summarize_override
+        self.start_mono = time.monotonic()
+        self.started_at_iso = datetime.now(UTC).isoformat()
+        self.done = False
+
+    def finish(self, message: Any, error: BaseException | None) -> None:
+        if self.done:
+            return
+        self.done = True
+        if message is None and self.kwargs.get("model"):
+            # Failed before the first event: keep the requested model on the span.
+            message = SimpleNamespace(
+                model=self.kwargs["model"], usage=None, content=[], stop_reason=None
+            )
+        _record_stream_span(
+            self.name,
+            message,
+            kwargs=self.kwargs,
+            start_mono=self.start_mono,
+            started_at_iso=self.started_at_iso,
+            summarize_override=self.summarize_override,
+            error=error,
+        )
+
+
+def _stream_snapshot(stream: Any) -> Any:
+    """The SDK's accumulated message, or None if no event arrived."""
+    try:
+        return stream.current_message_snapshot
+    except Exception:  # noqa: BLE001 — asserts None before the first event
+        return None
+
+
+class _TracedMessageStreamManager:
+    """Wraps ``MessageStreamManager`` (what ``messages.stream()`` returns)."""
+
+    def __init__(
+        self, inner: Any, kwargs: dict[str, Any], *, summarize_override: bool
+    ) -> None:
+        self._av_inner = inner
+        self._av_state = _StreamSpanState(
+            "anthropic.messages.stream", kwargs, summarize_override
+        )
+        self._av_stream: Any = None
+
+    def __enter__(self) -> Any:
+        try:
+            self._av_stream = self._av_inner.__enter__()
+        except BaseException as exc:
+            self._av_state.finish(None, exc)
+            raise
+        return self._av_stream
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        try:
+            return self._av_inner.__exit__(exc_type, exc, tb)
+        finally:
+            self._av_state.finish(_stream_snapshot(self._av_stream), exc)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._av_inner, name)
+
+
+class _TracedAsyncMessageStreamManager:
+    """Wraps ``AsyncMessageStreamManager`` (async ``messages.stream()``)."""
+
+    def __init__(
+        self, inner: Any, kwargs: dict[str, Any], *, summarize_override: bool
+    ) -> None:
+        self._av_inner = inner
+        self._av_state = _StreamSpanState(
+            "anthropic.messages.stream", kwargs, summarize_override
+        )
+        self._av_stream: Any = None
+
+    async def __aenter__(self) -> Any:
+        try:
+            self._av_stream = await self._av_inner.__aenter__()
+        except BaseException as exc:
+            self._av_state.finish(None, exc)
+            raise
+        return self._av_stream
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        try:
+            return await self._av_inner.__aexit__(exc_type, exc, tb)
+        finally:
+            self._av_state.finish(_stream_snapshot(self._av_stream), exc)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._av_inner, name)
+
+
+class _RawStreamAccumulator:
+    """Rebuilds model, usage and content from ``create(stream=True)`` events.
+
+    Usage arrives in two places: ``message_start`` (input and cache tokens)
+    and ``message_delta`` (cumulative output tokens). Later non-null values win.
+    """
+
+    def __init__(self) -> None:
+        self.model: str | None = None
+        self.usage: dict[str, int] = {}
+        self.stop_reason: str | None = None
+        self.blocks: dict[int, dict[str, Any]] = {}
+
+    def _merge_usage(self, usage: Any) -> None:
+        for field in _USAGE_FIELDS:
+            value = getattr(usage, field, None)
+            if value is not None:
+                self.usage[field] = value
+
+    def feed(self, event: Any) -> None:
+        etype = getattr(event, "type", None)
+        if etype == "message_start":
+            message = getattr(event, "message", None)
+            self.model = getattr(message, "model", None)
+            self._merge_usage(getattr(message, "usage", None))
+        elif etype == "message_delta":
+            self._merge_usage(getattr(event, "usage", None))
+            self.stop_reason = (
+                getattr(getattr(event, "delta", None), "stop_reason", None)
+                or self.stop_reason
+            )
+        elif etype == "content_block_start":
+            block = getattr(event, "content_block", None)
+            self.blocks[getattr(event, "index", len(self.blocks))] = {
+                "type": getattr(block, "type", None),
+                "name": getattr(block, "name", None),
+                "parts": [],
+            }
+        elif etype == "content_block_delta":
+            block = self.blocks.get(getattr(event, "index", -1))
+            delta = getattr(event, "delta", None)
+            if block is not None:
+                piece = getattr(delta, "text", None) or getattr(
+                    delta, "partial_json", None
+                )
+                if piece:
+                    block["parts"].append(piece)
+
+    def message(self) -> Any:
+        if self.model is None and not self.usage:
+            return None
+        content = []
+        for index in sorted(self.blocks):
+            block = self.blocks[index]
+            joined = "".join(block["parts"])
+            if block["type"] == "text":
+                content.append(SimpleNamespace(type="text", text=joined))
+            elif block["type"] == "tool_use":
+                content.append(
+                    SimpleNamespace(
+                        type="tool_use", name=block["name"], input=joined or None
+                    )
+                )
+        return SimpleNamespace(
+            model=self.model,
+            usage=SimpleNamespace(**{f: self.usage.get(f, 0) for f in _USAGE_FIELDS}),
+            content=content,
+            stop_reason=self.stop_reason,
+        )
+
+
+class _TracedRawStream:
+    """Wraps the sync ``Stream`` returned by ``messages.create(stream=True)``."""
+
+    def __init__(
+        self, inner: Any, kwargs: dict[str, Any], *, summarize_override: bool
+    ) -> None:
+        self._av_inner = inner
+        self._av_acc = _RawStreamAccumulator()
+        self._av_state = _StreamSpanState(
+            "anthropic.messages.create", kwargs, summarize_override
+        )
+
+    def __iter__(self) -> Any:
+        try:
+            for event in self._av_inner:
+                self._av_acc.feed(event)
+                yield event
+        except GeneratorExit:
+            # Consumer stopped early (break / close): not an error.
+            self._av_state.finish(self._av_acc.message(), None)
+            raise
+        except BaseException as exc:
+            self._av_state.finish(self._av_acc.message(), exc)
+            raise
+        self._av_state.finish(self._av_acc.message(), None)
+
+    def __enter__(self) -> Any:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        try:
+            self._av_inner.close()
+        finally:
+            self._av_state.finish(self._av_acc.message(), None)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._av_inner, name)
+
+
+class _TracedAsyncRawStream:
+    """Wraps the ``AsyncStream`` from async ``messages.create(stream=True)``."""
+
+    def __init__(
+        self, inner: Any, kwargs: dict[str, Any], *, summarize_override: bool
+    ) -> None:
+        self._av_inner = inner
+        self._av_acc = _RawStreamAccumulator()
+        self._av_state = _StreamSpanState(
+            "anthropic.messages.create", kwargs, summarize_override
+        )
+
+    async def __aiter__(self) -> Any:
+        try:
+            async for event in self._av_inner:
+                self._av_acc.feed(event)
+                yield event
+        except GeneratorExit:
+            self._av_state.finish(self._av_acc.message(), None)
+            raise
+        except BaseException as exc:
+            self._av_state.finish(self._av_acc.message(), exc)
+            raise
+        self._av_state.finish(self._av_acc.message(), None)
+
+    async def __aenter__(self) -> Any:
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        await self.close()
+
+    async def close(self) -> None:
+        try:
+            await self._av_inner.close()
+        finally:
+            self._av_state.finish(self._av_acc.message(), None)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._av_inner, name)
 
 
 # ---------------------------------------------------------------------------
@@ -868,13 +1196,19 @@ class _WrappedMessages:
         wrap-time) because customer code may call ``wrap()`` before any
         SDK code runs.
         """
+        if _install_active():
+            # The global patch records the span. We just pass through.
+            return self._av_inner.create(*args, **kwargs)
+        if kwargs.get("stream"):
+            return _TracedRawStream(
+                self._av_inner.create(*args, **kwargs),
+                kwargs,
+                summarize_override=self._av_summarize_default,
+            )
         start_mono = time.monotonic()
         started_at_iso = datetime.now(UTC).isoformat()
         set_active_framework(_FRAMEWORK_NAME)
         try:
-            if _install_active():
-                # The global patch records the span. We just pass through.
-                return self._av_inner.create(*args, **kwargs)
             if get_active_trace() is not None:
                 response = self._av_inner.create(*args, **kwargs)
                 _record_llm_span_for_response(
@@ -902,6 +1236,16 @@ class _WrappedMessages:
         finally:
             clear_active_framework()
 
+    def stream(self, *args: Any, **kwargs: Any) -> Any:
+        """``messages.stream``: one ``llm`` span when the block ends (MHQ-1415)."""
+        if _install_active():
+            return self._av_inner.stream(*args, **kwargs)
+        return _TracedMessageStreamManager(
+            self._av_inner.stream(*args, **kwargs),
+            kwargs,
+            summarize_override=self._av_summarize_default,
+        )
+
     def __getattr__(self, name: str) -> Any:
         """Delegate every other attribute/method to the underlying messages."""
         # ``__getattr__`` only runs for misses, so this never shadows
@@ -918,12 +1262,18 @@ class _WrappedAsyncMessages:
         self._av_summarize_default = summarize_default
 
     async def create(self, *args: Any, **kwargs: Any) -> Any:
+        if _install_active():
+            return await self._av_inner.create(*args, **kwargs)
+        if kwargs.get("stream"):
+            return _TracedAsyncRawStream(
+                await self._av_inner.create(*args, **kwargs),
+                kwargs,
+                summarize_override=self._av_summarize_default,
+            )
         start_mono = time.monotonic()
         started_at_iso = datetime.now(UTC).isoformat()
         set_active_framework(_FRAMEWORK_NAME)
         try:
-            if _install_active():
-                return await self._av_inner.create(*args, **kwargs)
             if get_active_trace() is not None:
                 response = await self._av_inner.create(*args, **kwargs)
                 _record_llm_span_for_response(
@@ -948,6 +1298,16 @@ class _WrappedAsyncMessages:
                 return response
         finally:
             clear_active_framework()
+
+    def stream(self, *args: Any, **kwargs: Any) -> Any:
+        """Async ``messages.stream`` — returns a manager used with ``async with``."""
+        if _install_active():
+            return self._av_inner.stream(*args, **kwargs)
+        return _TracedAsyncMessageStreamManager(
+            self._av_inner.stream(*args, **kwargs),
+            kwargs,
+            summarize_override=self._av_summarize_default,
+        )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._av_inner, name)
@@ -1111,6 +1471,10 @@ def _wrap_create(original):
     """Build the sync replacement for Messages.create (install-style)."""
 
     def traced_create(self, *args, **kwargs):
+        if kwargs.get("stream"):
+            return _TracedRawStream(
+                original(self, *args, **kwargs), kwargs, summarize_override=False
+            )
         start_mono = time.monotonic()
         started_at_iso = datetime.now(UTC).isoformat()
         set_active_framework(_FRAMEWORK_NAME)
@@ -1143,10 +1507,26 @@ def _wrap_create(original):
     return traced_create
 
 
+def _wrap_stream(original, manager_cls):
+    """Build the replacement for (Async)Messages.stream (install-style)."""
+
+    def traced_stream(self, *args, **kwargs):
+        return manager_cls(
+            original(self, *args, **kwargs), kwargs, summarize_override=False
+        )
+
+    traced_stream.__wrapped__ = original
+    return traced_stream
+
+
 def _wrap_acreate(original):
     """Build the async replacement for AsyncMessages.create (install-style)."""
 
     async def traced_acreate(self, *args, **kwargs):
+        if kwargs.get("stream"):
+            return _TracedAsyncRawStream(
+                await original(self, *args, **kwargs), kwargs, summarize_override=False
+            )
         start_mono = time.monotonic()
         started_at_iso = datetime.now(UTC).isoformat()
         set_active_framework(_FRAMEWORK_NAME)
@@ -1204,7 +1584,7 @@ def install() -> bool:
     Idempotent — safe to call repeatedly. Returns True if installed (newly
     or already), False if Anthropic isn't available or installation failed.
     """
-    global _original_create, _original_acreate
+    global _original_create, _original_acreate, _original_stream, _original_astream
 
     try:
         import anthropic  # type: ignore[import-not-found]
@@ -1240,6 +1620,24 @@ def install() -> bool:
         # Async path is optional — older anthropic versions may not expose it.
         pass
 
+    # MHQ-1415: stream() posts its own request and never calls create().
+    try:
+        from anthropic.resources.messages import (
+            AsyncMessages,  # type: ignore[import-not-found]
+            Messages,  # type: ignore[import-not-found]
+        )
+
+        _original_stream = Messages.stream
+        Messages.stream = _wrap_stream(_original_stream, _TracedMessageStreamManager)  # type: ignore[method-assign]
+        _original_astream = AsyncMessages.stream
+        AsyncMessages.stream = _wrap_stream(  # type: ignore[method-assign]
+            _original_astream, _TracedAsyncMessageStreamManager
+        )
+    except (ImportError, AttributeError) as exc:
+        logger.debug(
+            "morse_ai: Anthropic adapter could not patch messages.stream: %s", exc
+        )
+
     setattr(anthropic, _INSTALL_FLAG, True)
     logger.info("morse_ai: Anthropic adapter installed")
     return True
@@ -1248,7 +1646,7 @@ def install() -> bool:
 @absorb_errors(fingerprint="morse_ai.adapters.anthropic.uninstall")
 def uninstall() -> None:
     """Restore the original Anthropic methods. Idempotent."""
-    global _original_create, _original_acreate
+    global _original_create, _original_acreate, _original_stream, _original_astream
 
     try:
         import anthropic  # type: ignore[import-not-found]
@@ -1279,5 +1677,21 @@ def uninstall() -> None:
         except (ImportError, AttributeError):
             pass
         _original_acreate = None
+
+    if _original_stream is not None or _original_astream is not None:
+        try:
+            from anthropic.resources.messages import (
+                AsyncMessages,  # type: ignore[import-not-found]
+                Messages,  # type: ignore[import-not-found]
+            )
+
+            if _original_stream is not None:
+                Messages.stream = _original_stream  # type: ignore[method-assign]
+            if _original_astream is not None:
+                AsyncMessages.stream = _original_astream  # type: ignore[method-assign]
+        except (ImportError, AttributeError):
+            pass
+        _original_stream = None
+        _original_astream = None
 
     setattr(anthropic, _INSTALL_FLAG, False)
