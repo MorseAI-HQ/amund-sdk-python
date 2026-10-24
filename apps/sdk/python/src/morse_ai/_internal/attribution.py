@@ -25,6 +25,40 @@ MAX_PROMPT_REFS = 20
 MAX_PROMPT_NAME_LEN = 255
 MAX_AGENT_VERSION_LEN = 128
 
+_PROMPT_VERSION_STR = re.compile(r"^v?(\d{1,9})$", re.IGNORECASE)
+_prompt_version_warned = False
+
+
+def coerce_prompt_version(version: Any) -> int | None:
+    """An int >= 1, or a whole-number string ("3", "v3") read as one; else None.
+
+    MHQ-1415: ``set_prompt("triage", "3")`` used to drop the version silently.
+    """
+    if isinstance(version, bool):
+        return None
+    if isinstance(version, int):
+        return version if version >= 1 else None
+    if isinstance(version, str):
+        match = _PROMPT_VERSION_STR.match(version.strip())
+        if match:
+            number = int(match.group(1))
+            return number if number >= 1 else None
+    return None
+
+
+def _warn_prompt_version_dropped() -> None:
+    """Once per process; never includes the value (it may be an id or PII)."""
+    global _prompt_version_warned
+    if _prompt_version_warned:
+        logger.debug("morse_ai: prompt version dropped")
+        return
+    _prompt_version_warned = True
+    logger.warning(
+        "morse_ai: a set_prompt() version that is not a whole number >= 1 was "
+        "dropped and only the prompt name recorded; pass the registry version "
+        'number (e.g. 3 or "3"). This warning prints once per process.'
+    )
+
 
 def clean_record_key(key_type: Any, key_value: Any) -> tuple[str, str] | None:
     """Return ``(key_type, key_value)`` normalised, or None when invalid.
@@ -112,14 +146,11 @@ def clean_prompt_ref(
             return None
         ref: dict[str, Any] = {"name": norm_name}
         if version is not None:
-            if (
-                isinstance(version, int)
-                and not isinstance(version, bool)
-                and version >= 1
-            ):
-                ref["version"] = version
+            coerced = coerce_prompt_version(version)
+            if coerced is not None:
+                ref["version"] = coerced
             else:
-                logger.debug("morse_ai: prompt %r version dropped", norm_name)
+                _warn_prompt_version_dropped()
         if span_id:
             ref["span_id"] = span_id
         if link_source == "fetch":

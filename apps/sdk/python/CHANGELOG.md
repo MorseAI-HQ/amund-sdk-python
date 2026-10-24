@@ -9,7 +9,69 @@ The Python and TypeScript SDKs version **independently** — they share `0.4.0` 
 their first public release because they reached feature parity there, not
 because they are released in lockstep. Expect the numbers to diverge.
 
-## [0.8.0] — Unreleased
+## [0.7.0] — Unreleased (release candidate `0.7.0rc1`)
+
+`0.7.0` was never published (PyPI has `0.6.0`), so everything below ships together as `0.7.0`.
+The release goes out as `0.7.0rc1` first (SDK_PUBLISHING.md §1.1).
+
+### Fixed — launch verification (2026-10-24)
+
+- **A failed Anthropic `messages.create` keeps an `llm` span** (MHQ-1415): status `failed`, the
+  requested model, latency and the error; no usage, so it is never priced. It previously left no
+  span at all.
+- **LangChain-Anthropic under `init()` + `MorseCallbackHandler` records one span per call**
+  (MHQ-1415). The zero-code Anthropic patch no longer records a second
+  `anthropic.messages.create` span when the call runs inside an open framework `llm` span.
+- **LangChain prompt-cache writes are reported** (MHQ-1414): `input_token_details.cache_creation`
+  is sent as `cache_write_tokens`, so cache writes are no longer priced at the plain input rate.
+- **A guardrail cancelled by a sibling's tripwire is not a failure** (MHQ-1406): it completes with
+  `metadata.cancelled = true` instead of a `CancelledError` failure.
+- **Redaction leaves identifiers alone** (MHQ-1412): the phone, card and SSN patterns no longer
+  match digit runs inside UUIDs and hex ids (span ids, retriever document ids). API keys, JWTs,
+  secrets and emails are still redacted wherever they appear. The server and TS SDK apply the
+  same rule.
+
+### Fixed — WP-3 Python SDK correctness (2026-10-24)
+
+- **Zero-code setup traces raw OpenAI clients** (MHQ-1506, MHQ-1410): `openai` joins the
+  auto-detect map, so `MORSE_API_KEY` + `init()` now traces `chat.completions.create` and
+  `responses.create`, including through LiteLLM's OpenAI provider (`with_raw_response`) and Agno.
+  It previously recorded nothing for these apps. The adapter skips calls a framework adapter
+  already records (OpenAI Agents runs, LangChain `ChatOpenAI` under the callback handler).
+  `google-genai` and LiteLLM's non-OpenAI providers are still not covered.
+- **LangGraph's zero-code install no longer races the import** (MHQ-1537). `langgraph` is a
+  namespace package the import hook could not wrap, so a background thread installed the adapter
+  while the app was still importing, which could deadlock on a `langchain_core` module lock
+  (`_DeadlockError`, LangGraph spans silently lost). The adapter now installs at the end of
+  `langgraph.pregel`'s import, in the importing thread.
+- **OpenAI streaming is traced** (MHQ-1407): `stream=True` on Chat Completions and Responses
+  (sync, async, `next()`-style consumers, `.stream()` helpers, `with_raw_response`) records model,
+  tokens, cost and output when the stream ends, instead of a span with all of them NULL and a $0
+  trace. Without `stream_options={"include_usage": True}` the span has no tokens and says so
+  (`metadata.usage_unavailable`).
+- **Raw OpenAI: failed calls and tools** (MHQ-1410): a call that raises records a failed `llm`
+  span (model, latency, error, exception type); tool calls become `tool` spans inferred from the
+  response that requested them and the request carrying their result (`transfer_to_*` calls carry
+  `metadata.handoff_target`); the input panel keeps assistant tool calls, tool results and the
+  Responses API's `function_call` / `function_call_output` items.
+- **`track()` / `batch_track()` store runs** (MHQ-1410): they sent a payload the server rejected
+  with 422, which the SDK swallowed. They now build the same trace as `record()`; unknown keys go
+  to `metadata`, and a `batch_track()` run without `agent` is skipped.
+- **LangChain tool-calling turns have output** (MHQ-1410): the `llm` span lists the requested tool
+  calls instead of `{"text": ""}`.
+- **Cached tokens are reported** (MHQ-1236): OpenAI spans now carry `cached_input_tokens` (computed
+  for pricing but never sent). OpenAI, Anthropic and Claude Agent SDK spans send `0` rather than
+  NULL when usage is reported with no cache activity.
+- **Bundled pricing has the WP-8 catalog rows** (2026-10-24): 50 models added to match the server
+  catalog (OpenAI gpt-5.1 to gpt-6.x, gpt-5-pro, o3-pro, o1-pro; Gemini 3.x/4; Bedrock Nova, Llama,
+  Mistral, gpt-oss; Claude Mythos 5/5.1). SDK-side estimates for these fell back to a cheaper
+  prefix (`gpt-5-pro` priced as `gpt-5`) or to no price at all.
+- **`set_prompt` reads string versions** (MHQ-1415): `"3"` / `"v3"` are recorded as version 3
+  instead of being dropped silently; any other non-integer version is dropped with a one-time
+  warning.
+- **DB capture keeps psycopg 3 connections real** (MHQ-1357): `psycopg.connect()` returns the real
+  `psycopg.Connection` (traced through its `cursor_factory`) instead of a proxy, so LangGraph's
+  `PostgresSaver` no longer rejects it with "Invalid connection type" when capture is on.
 
 ### Fixed — Anthropic streaming is traced (MHQ-1415)
 
@@ -40,8 +102,6 @@ Set `MORSE_AGENT_IDENTITY=legacy` to restore the previous naming and span shape.
   longer nest under each other and LLM/tool spans no longer land on the root placeholder. Spans
   leave the shared stack by identity, not `pop()`.
 - **OpenAI Agents:** a handoff target is a sub-agent of the agent that handed off to it.
-
-## [0.7.0] — Unreleased
 
 ### Added
 

@@ -242,3 +242,11 @@ condition = "AND"
 regexTarget = "secret"
 paths = ["^scripts/check-inline-credentials\\.py$"]
 regexes = ["^h7Kd93ntQm2z$"]
+
+[[allowlists]]
+description = "Owner-reviewed synthetic fixture or code identifier"
+targetRules = ["github-pat"]
+condition = "AND"
+regexTarget = "secret"
+paths = ["^apps/sdk/python/tests/test_redaction\\.py$"]
+regexes = ["^ghp_1234567890abcdef1234567890abcdef1234$"] # pragma: allowlist secret (reviewed synthetic fixture values only)

@@ -47,6 +47,47 @@ def _derive_otlp_endpoint(traces_endpoint: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, _OTLP_TRACES_PATH, "", ""))
 
 
+_RECORD_FIELDS = (
+    "success",
+    "outcome",
+    "model",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "duration_ms",
+    "error_message",
+    "status",
+)
+
+
+def _record_kwargs(agent_id: str, run_data: dict[str, Any]) -> dict[str, Any]:
+    """Map a ``track()`` run dict (RunRecord field names) onto ``record()``."""
+    data = dict(run_data)
+    data.pop("agent", None)
+    kwargs: dict[str, Any] = {"agent": agent_id}
+    for name in _RECORD_FIELDS:
+        if name in data:
+            kwargs[name] = data.pop(name)
+    cost = data.pop("cost_usd", None)
+    if cost is None:
+        cost = data.pop("cost", None)
+    else:
+        data.pop("cost", None)
+    if cost is not None:
+        kwargs["cost"] = cost
+    metadata = data.pop("metadata", None)
+    merged = dict(metadata) if isinstance(metadata, dict) else {}
+    # Bookkeeping a RunRecord carries that a v2 trace sets itself.
+    for key in ("run_id", "started_at", "ended_at", "sdk_version"):
+        data.pop(key, None)
+    merged.update(data)
+    if merged:
+        kwargs["metadata"] = merged
+    if kwargs.get("status") is None:
+        kwargs.pop("status", None)
+    return kwargs
+
+
 class _Client:
     """Private SDK client. Backs the `morse_ai.*` module-level singleton.
 
@@ -159,31 +200,38 @@ class _Client:
     def track(self, agent_id: str, run_data: dict[str, Any]) -> None:
         """Submit a single agent run to the ingestion endpoint.
 
-        Primary V2 submission method. Non-blocking, <0.1ms. The `run_data`
-        dict's shape mirrors RunRecord fields (agent, success, cost_usd,
-        model, tokens, duration_ms, etc.).
+        Non-blocking. ``run_data`` uses the ``RunRecord`` field names
+        (``success``, ``outcome``, ``cost_usd``, ``model``, ``input_tokens``,
+        ``output_tokens``, ``total_tokens``, ``duration_ms``,
+        ``error_message``, ``status``, ``metadata``); any other key is kept
+        under ``metadata``.
+
+        MHQ-1410: this used to queue the bare dict, which the server rejected
+        with 422 (``traces`` field required) and the SDK swallowed, so nothing
+        was ever stored. It now builds the same single-span trace as
+        ``record()``.
 
         Args:
-            agent_id: Name of the agent (e.g., "lead-qualifier"). Used to
-                set the `agent` field on the wire payload.
-            run_data: Dict of run fields. The `agent` key is overridden with
-                `agent_id` if present.
+            agent_id: Name of the agent (e.g., "lead-qualifier"). Overrides
+                any ``agent`` key in ``run_data``.
+            run_data: Dict of run fields.
         """
-        payload = dict(run_data)
-        payload["agent"] = agent_id
-        self._transport.track(payload)
+        self.record(**_record_kwargs(agent_id, run_data))
 
     def batch_track(self, runs: list[dict[str, Any]]) -> None:
-        """Submit multiple agent runs in bulk.
+        """Submit multiple agent runs; each dict needs an ``agent`` key.
 
-        Each run dict is queued individually; the transport batches them on
-        its normal flush schedule (2s interval, 100-event max batch). Spec
-        conformance note: the "single HTTP request" semantic is best-effort
-        — runs queued together will typically flush together, but there is
-        no guarantee against an interleaved flush from another thread.
+        Each run becomes one trace (see ``track``); a run without ``agent``
+        is skipped with a debug log. The transport batches them on its normal
+        flush schedule.
         """
         for run in runs:
-            self._transport.track(dict(run))
+            data = dict(run)
+            agent = data.pop("agent", None)
+            if not agent:
+                logger.debug("morse_ai: batch_track skipped a run with no 'agent'")
+                continue
+            self.track(str(agent), data)
 
     def record(
         self,

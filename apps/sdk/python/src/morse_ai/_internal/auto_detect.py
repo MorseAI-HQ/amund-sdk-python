@@ -45,8 +45,43 @@ logger = logging.getLogger("morse_ai")
 
 # Module-level state for the import-hook lazy installer.
 _install_lock = threading.Lock()
-_lazy_targets: dict[str, str] = {}  # target module name -> adapter dotted path
+_lazy_targets: dict[str, str] = {}  # trigger module name -> adapter dotted path
 _finder_installed = False
+
+# MHQ-1537: the module whose import installs an adapter, when it is not the
+# package itself. ``langgraph`` is a namespace package: its spec has no loader
+# at find time, so the hook could never wrap it and fell back to a background
+# thread that called ``install()`` the moment ``langgraph`` appeared in
+# ``sys.modules`` -- i.e. while the importing thread was still loading
+# ``langgraph.graph`` and ``langchain_core``. Two threads importing the same
+# circular ``langchain_core`` modules can deadlock (``_DeadlockError`` on
+# ``langchain_core.messages.utils`` in the testbed), and even without a
+# deadlock the patch landed after the import returned (the MHQ-1154 race).
+# ``langgraph.pregel`` is a regular package that every graph entry point
+# (``langgraph.graph``, ``langgraph.func``, ``langgraph.prebuilt``) imports and
+# that itself imports ``langchain_core.callbacks`` and
+# ``langgraph.checkpoint.base``, so installing at the end of its body runs in
+# the importing thread and needs no new imports.
+_TRIGGER_MODULES: dict[str, str] = {
+    "langgraph": "langgraph.pregel",
+}
+
+
+def _trigger_module(target: str) -> str:
+    return _TRIGGER_MODULES.get(target, target)
+
+
+def _importable(name: str) -> bool:
+    """``find_spec`` that never raises.
+
+    It raises ``ValueError`` when ``sys.modules`` holds a module whose
+    ``__spec__`` is None (a stub or a module built by hand), which must not
+    stop the other adapters from installing.
+    """
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return name in sys.modules
 
 
 def _adapter_targets() -> dict[str, str]:
@@ -59,20 +94,28 @@ def _adapter_targets() -> dict[str, str]:
         "anthropic": "morse_ai.adapters.anthropic",
     }
 
+    # MHQ-1506: raw OpenAI clients (and the libraries that drive one --
+    # LiteLLM's OpenAI provider, Agno's OpenAIChat) were never traced by the
+    # zero-code setup even though the adapter existed. The adapter skips calls
+    # that a framework adapter already records (openai-agents runs, LangChain
+    # llm spans), so auto-installing it does not double-count those.
+    if _importable("openai"):
+        targets["openai"] = "morse_ai.adapters.openai"
+
     # LangGraph is preferred when available — registers under "langgraph" so
     # the lazy hook fires on `import langgraph` regardless of order.
-    if importlib.util.find_spec("langgraph") is not None:
+    if _importable("langgraph"):
         targets["langgraph"] = "morse_ai.adapters.langgraph"
 
     # OpenAI Agents SDK — package is published as `openai-agents` on PyPI but
     # imports as the top-level `agents` module. Wave 4 adapter.
-    if importlib.util.find_spec("agents") is not None:
+    if _importable("agents"):
         targets["agents"] = "morse_ai.adapters.openai_agents"
 
     # Anthropic claude-agent-sdk — shells out to the `claude` CLI binary, so
     # the generic Anthropic adapter never fires. This adapter intercepts the
     # message stream at ClaudeSDKClient.receive_response() instead.
-    if importlib.util.find_spec("claude_agent_sdk") is not None:
+    if _importable("claude_agent_sdk"):
         targets["claude_agent_sdk"] = "morse_ai.adapters.claude_agent_sdk"
 
     # The generic langchain.py adapter (callback handler) is consumed
@@ -216,16 +259,25 @@ class _LazyInstallFinder(importlib.abc.MetaPathFinder):
     @staticmethod
     def _install_when_ready(target_module: str, adapter_dotted_path: str) -> None:
         # Bounded wait — give the target module up to 5 seconds to finish
-        # loading. In practice it's milliseconds.
+        # loading. In practice it's milliseconds. MHQ-1537: wait until the
+        # module's body has finished, not merely until it is registered in
+        # ``sys.modules`` (which happens before the body runs); installing
+        # while the importing thread is still mid-import is what deadlocked.
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
-            if target_module in sys.modules:
+            module = sys.modules.get(target_module)
+            if module is not None and not _is_initializing(module):
                 _install_one(adapter_dotted_path)
                 return
             time.sleep(0.01)
         # Best-effort — try install anyway in case sys.modules entry slipped
         # past our polling window.
         _install_one(adapter_dotted_path)
+
+
+def _is_initializing(module: Any) -> bool:
+    spec = getattr(module, "__spec__", None)
+    return bool(getattr(spec, "_initializing", False))
 
 
 _finder_singleton = _LazyInstallFinder()
@@ -250,10 +302,11 @@ def install_adapters() -> None:
 
         # Phase 1: install for already-imported modules.
         for module_name, adapter_path in targets.items():
-            if module_name in sys.modules:
+            trigger = _trigger_module(module_name)
+            if trigger in sys.modules:
                 _install_one(adapter_path)
             else:
-                _lazy_targets[module_name] = adapter_path
+                _lazy_targets[trigger] = adapter_path
 
         # Phase 2: install lazy import hook (once per process).
         if _lazy_targets and not _finder_installed:

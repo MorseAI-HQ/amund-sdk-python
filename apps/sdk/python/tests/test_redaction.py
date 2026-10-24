@@ -541,3 +541,49 @@ def test_all_patterns_are_compilable_python_regex() -> None:
 
     for key in PATTERN_KEYS:
         assert isinstance(_COMPILED[key], re.Pattern)
+
+
+# ---------------------------------------------------------------------------
+# MHQ-1412 — identifiers are not PII (dogfood 2026-10-18, groups A/D/F)
+# ---------------------------------------------------------------------------
+
+_ID_CASES = [
+    # FAISS document id (group A, trace f18d58b5): "...-0c[REDACTED:phone]"
+    '{"id": "bc41d39b-d298-4de5-83ba-0c4576313225"}',
+    # duplicate_of_span_id (group D): leading digits were Luhn-valid
+    '{"duplicate_of_span_id": "40128888-8888-1881-286c-7f355e8c7903"}',
+    # 32-hex trace id (group F): "...7f[REDACTED:phone]"
+    "trace_id=50df6d43791e4443b23f7f4576313225",
+    # 16-hex span id with a 10-digit run
+    "span 4c4155551234abcd",
+]
+
+
+@pytest.mark.req("MHQ-1412")
+@pytest.mark.parametrize("text", _ID_CASES)
+def test_ids_are_not_redacted_as_phone_or_card(text: str) -> None:
+    config = RedactionConfig.build(enabled=True)
+    assert redact_string(text, config) == text
+
+
+@pytest.mark.req("MHQ-1412")
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "call 415-555-1234 re 2d16e332-1935-4a18-8568-ddf9431a1c3c",
+            "call [REDACTED:phone] re 2d16e332-1935-4a18-8568-ddf9431a1c3c",
+        ),
+        ("card 4111111111111111", "card [REDACTED:credit_card]"),
+        ("ssn 123-45-6789", "ssn [REDACTED:ssn]"),
+        ("deadbeefdeadbeef12@example.com", "[REDACTED:email]"),
+        # A hex key body must never be shielded from the key patterns.
+        (
+            "ghp_1234567890abcdef1234567890abcdef1234",  # pragma: allowlist secret
+            "[REDACTED:api_key]",
+        ),
+    ],
+)
+def test_pii_next_to_ids_is_still_redacted(text: str, expected: str) -> None:
+    config = RedactionConfig.build(enabled=True)
+    assert redact_string(text, config) == expected

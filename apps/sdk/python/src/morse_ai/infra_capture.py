@@ -367,6 +367,47 @@ class _TracingConnection:
         return self._conn.__exit__(*exc)
 
 
+@functools.lru_cache(maxsize=32)
+def _traced_psycopg_cursor_class(base: type) -> type:
+    """A subclass of psycopg 3's ``base`` cursor class that records a ``db`` span.
+
+    MHQ-1357: psycopg 3 connections are returned as-is (so
+    ``isinstance(conn, psycopg.Connection)`` holds -- LangGraph's
+    ``PostgresSaver`` rejected the old proxy with "Invalid connection type")
+    and capture goes through psycopg's own ``cursor_factory`` hook instead.
+    ``Connection.execute`` builds its cursor from that factory too.
+    """
+
+    class _MorseTracedCursor(base):  # type: ignore[valid-type, misc]
+        def execute(self, query: Any, *args: Any, **kwargs: Any) -> Any:
+            if get_active_trace() is None:
+                return super().execute(query, *args, **kwargs)
+            with _db_span(query):
+                return super().execute(query, *args, **kwargs)
+
+        def executemany(self, query: Any, *args: Any, **kwargs: Any) -> Any:
+            if get_active_trace() is None:
+                return super().executemany(query, *args, **kwargs)
+            with _db_span(query):
+                return super().executemany(query, *args, **kwargs)
+
+    _MorseTracedCursor.__name__ = base.__name__
+    _MorseTracedCursor.__qualname__ = base.__qualname__
+    _MorseTracedCursor._morse_traced = True  # type: ignore[attr-defined]
+    return _MorseTracedCursor
+
+
+def _trace_psycopg_connection(conn: Any) -> Any:
+    """Point a real psycopg 3 connection's cursor_factory at a traced subclass."""
+    try:
+        factory = getattr(conn, "cursor_factory", None)
+        if isinstance(factory, type) and not getattr(factory, "_morse_traced", False):
+            conn.cursor_factory = _traced_psycopg_cursor_class(factory)
+    except Exception as exc:  # noqa: BLE001 — never break the customer's connect
+        logger.debug("morse_ai: psycopg cursor_factory wrap skipped: %s", exc)
+    return conn
+
+
 def _wrap_connect(module_name: str, connect_attr: str = "connect") -> bool:
     """Wrap ``<module>.connect`` to return a tracing connection. Returns True
     if patched (module importable + not already patched)."""
@@ -383,7 +424,16 @@ def _wrap_connect(module_name: str, connect_attr: str = "connect") -> bool:
     if orig is None:
         return False
 
-    def _connect(*args: Any, **kwargs: Any) -> _TracingConnection:
+    if module_name == "psycopg":
+
+        def _connect(*args: Any, **kwargs: Any) -> Any:
+            return _trace_psycopg_connection(orig(*args, **kwargs))
+
+        _originals[key] = (module, connect_attr, orig)
+        setattr(module, connect_attr, _connect)
+        return True
+
+    def _connect(*args: Any, **kwargs: Any) -> _TracingConnection:  # type: ignore[misc]
         return _TracingConnection(orig(*args, **kwargs))
 
     _originals[key] = (module, connect_attr, orig)

@@ -683,8 +683,9 @@ def _emit_llm_span_from_assistant_msg(
             input_tokens=total_input if total_input else None,
             output_tokens=output_tokens if output_tokens else None,
             total_tokens=total_tokens if total_tokens else None,
-            cached_input_tokens=cache_read if cache_read else None,
-            cache_write_tokens=cache_write if cache_write else None,
+            # MHQ-1236: 0 when usage was reported without cache activity.
+            cached_input_tokens=cache_read if usage else None,
+            cache_write_tokens=cache_write if usage else None,
             cost_usd=round(cost, 6) if cost is not None else None,
             input_data=input_data,
             output_data=output_data,

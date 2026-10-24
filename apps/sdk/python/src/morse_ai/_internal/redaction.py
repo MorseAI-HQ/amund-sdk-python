@@ -324,16 +324,60 @@ def redact_string(s: str, config: RedactionConfig) -> str:
                 continue
             compiled = _COMPILED[key]
             replacement = _REPLACEMENTS[key]
+            # Only the digit-run patterns are kept off identifiers; key/token
+            # patterns always see the full text.
+            shielded, protected = (
+                _shield_ids(out) if key in _ID_SHIELDED_PATTERNS else (out, [])
+            )
             if key == "credit_card":
-                out = compiled.sub(_credit_card_sub, out)
+                shielded = compiled.sub(_credit_card_sub, shielded)
             else:
-                out = compiled.sub(replacement, out)
+                shielded = compiled.sub(replacement, shielded)
+            out = _unshield_ids(shielded, protected) if protected else shielded
 
     # Customer-supplied extras run last.
     for compiled in config.extra_patterns:
         out = compiled.sub(CUSTOM_REPLACEMENT, out)
 
     return out
+
+
+# MHQ-1412: identifiers are not PII. A UUID or a long hex id (trace/span ids,
+# vector-store document ids) often contains a 10+ digit run, which the phone
+# and card patterns carved out of the middle (``bc41d39b-...-0c[REDACTED:phone]``),
+# corrupting ids that exist to be joined on. Id-shaped tokens are set aside
+# before the built-in patterns run and restored afterwards. A hex id must
+# contain at least one letter, so an all-digit run (a card number) is never
+# shielded. Only the digit-run patterns below are shielded: API-key, JWT and
+# secret patterns always see the full text, so a key whose body is hex is
+# still redacted.
+_ID_SHIELDED_PATTERNS = frozenset({"credit_card", "phone_us", "phone_e164", "ssn_us"})
+# Never shields part of an email address (local part or domain label), so the
+# email pattern still sees the whole address.
+_ID_TOKEN = re.compile(
+    r"(?<![\w@.])(?:"
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"|(?=[0-9a-fA-F]*[a-fA-F])(?=[0-9a-fA-F]*[0-9])[0-9a-fA-F]{16,64}"
+    r")(?![0-9A-Za-z])(?![\w.+\-]*@)(?!\.[A-Za-z]{2,})"
+)
+_ID_PLACEHOLDER = "\ue000morse-id-{}\ue000"
+_ID_PLACEHOLDER_RE = re.compile("\ue000morse-id-(\\d+)\ue000")
+
+
+def _shield_ids(s: str) -> tuple[str, list[str]]:
+    protected: list[str] = []
+    if "\ue000" in s:  # never collide with caller text using the sentinel
+        return s, protected
+
+    def _sub(match: re.Match[str]) -> str:
+        protected.append(match.group(0))
+        return _ID_PLACEHOLDER.format(len(protected) - 1)
+
+    return _ID_TOKEN.sub(_sub, s), protected
+
+
+def _unshield_ids(s: str, protected: list[str]) -> str:
+    return _ID_PLACEHOLDER_RE.sub(lambda m: protected[int(m.group(1))], s)
 
 
 def _credit_card_sub(match: re.Match[str]) -> str:

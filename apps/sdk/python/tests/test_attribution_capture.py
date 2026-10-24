@@ -353,11 +353,32 @@ def test_set_prompt_duplicates_collapse():
 
 
 @pytest.mark.req("ATTR-04")
-@pytest.mark.parametrize("bad_version", [0, -1, "7", 1.5, True])
+@pytest.mark.parametrize("bad_version", [0, -1, "latest", "2026-10-01", 1.5, True])
 def test_invalid_version_is_dropped_but_name_kept(bad_version):
     with morse_ai.run("agent"):
         morse_ai.set_prompt("triage", bad_version)  # type: ignore[arg-type]
     assert _trace()["prompts"] == [{"name": "triage"}]
+
+
+@pytest.mark.req("ATTR-04", "MHQ-1415")
+@pytest.mark.parametrize(("given", "expected"), [("7", 7), ("v12", 12), (" 3 ", 3)])
+def test_whole_number_string_version_is_read_not_dropped(given, expected):
+    """MHQ-1415: a string version used to vanish silently."""
+    with morse_ai.run("agent"):
+        morse_ai.set_prompt("triage", given)
+    assert _trace()["prompts"] == [{"name": "triage", "version": expected}]
+
+
+@pytest.mark.req("MHQ-1415")
+def test_unreadable_version_warns_once(caplog, monkeypatch):
+    from morse_ai._internal import attribution
+
+    monkeypatch.setattr(attribution, "_prompt_version_warned", False)
+    with caplog.at_level("WARNING", logger="morse_ai"), morse_ai.run("agent"):
+        morse_ai.set_prompt("a", "latest")
+        morse_ai.set_prompt("b", "latest")
+    warnings = [r for r in caplog.records if "set_prompt() version" in r.getMessage()]
+    assert len(warnings) == 1
 
 
 @pytest.mark.req("ATTR-04")

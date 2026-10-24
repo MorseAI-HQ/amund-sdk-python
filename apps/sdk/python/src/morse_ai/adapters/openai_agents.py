@@ -37,6 +37,7 @@ out-of-band and never propagate to the customer's code.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -46,7 +47,9 @@ from typing import Any
 
 from morse_ai._internal.active_framework import (
     clear_active_framework,
+    reset_llm_owner,
     set_active_framework,
+    set_llm_owner,
 )
 from morse_ai._internal.agent_name import identity_legacy
 from morse_ai._internal.errors import absorb_errors
@@ -369,6 +372,12 @@ def _close_guardrail_span(
     if triggered:
         status = "failed"
         error_message = f"guardrail tripwire triggered: {meta['guardrail_name']}"
+    if isinstance(exc, asyncio.CancelledError):
+        # MHQ-1406: the Agents SDK cancels the sibling guardrails once one
+        # trips. A check that was cancelled did not fail; record that it was
+        # cut short instead of a CancelledError failure on every sibling.
+        meta["cancelled"] = True
+        exc = None
     if exc is not None:
         status = "failed"
         error_message = str(exc)
@@ -972,6 +981,9 @@ def _traced_runner_call(
 
         async def _run_async():
             failure: BaseException | None = None
+            # MHQ-1506: the runner hooks record every model call; the raw
+            # OpenAI client patch underneath must not record them again.
+            owner_token = set_llm_owner(_FRAMEWORK_NAME)
             try:
                 result = await original(starting_agent, input, *args, **kwargs)
                 av_hooks.finalize_open_agents()
@@ -982,12 +994,16 @@ def _traced_runner_call(
                 av_hooks.finalize_open_agents()
                 raise
             finally:
+                reset_llm_owner(owner_token)
                 _exit_auto_run(auto_run_cm, failure)
                 clear_active_framework()
 
         return _run_async()
 
-    # Sync path (run_sync OR run_streamed — both return synchronously).
+    # Sync path (run_sync OR run_streamed — both return synchronously). The
+    # owner mark is set around the call: run_streamed's background task copies
+    # the context when it is created, so it keeps the mark after we reset it.
+    owner_token = set_llm_owner(_FRAMEWORK_NAME)
     try:
         result = original(starting_agent, input, *args, **kwargs)
     except BaseException as exc:
@@ -995,6 +1011,8 @@ def _traced_runner_call(
         _exit_auto_run(auto_run_cm, exc)
         clear_active_framework()
         raise
+    finally:
+        reset_llm_owner(owner_token)
 
     if streamed:
         # The stream is consumed asynchronously by the caller — closing the

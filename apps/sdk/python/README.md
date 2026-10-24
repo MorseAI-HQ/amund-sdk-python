@@ -84,17 +84,21 @@ spans over OTLP by default — see [Transport](#transport) below.
 ```bash
 pip install "morse-ai[anthropic]"
 export MORSE_API_KEY=mhq_xxxxx
-# your existing anthropic / openai-agents / langgraph / claude-agent-sdk
-# code is now traced — no morse_ai.wrap() calls anywhere
+# your existing anthropic / openai / openai-agents / langgraph /
+# claude-agent-sdk code is now traced — no morse_ai.wrap() calls anywhere
 ```
 
 When the SDK initializes, it scans `sys.modules` for installed
 provider SDKs — and registers an import hook for ones imported later —
 and calls each detected adapter's `install()`. Today that covers
-`anthropic`, `openai-agents` (imports as `agents`), `langgraph`, and
-`claude-agent-sdk`. Priority rule: when both LangGraph and generic
-LangChain are importable, only the LangGraph adapter installs, to
-avoid duplicate spans. Opt out entirely with
+`anthropic`, `openai` (raw clients, and libraries that drive one: LiteLLM's
+OpenAI provider, Agno's `OpenAIChat`), `openai-agents` (imports as `agents`),
+`langgraph`, and `claude-agent-sdk`. Priority rules: when both LangGraph and
+generic LangChain are importable, only the LangGraph adapter installs; and the
+raw OpenAI adapter does not record a call that a framework adapter already
+records (an OpenAI Agents run, a LangChain `ChatOpenAI` call under the
+callback handler), to avoid duplicate spans. `google-genai` and LiteLLM's
+non-OpenAI providers are not covered: send those over OTLP. Opt out entirely with
 `MORSE_DISABLE_AUTO_DETECT=1`; you can still call any adapter's
 `install()`/`wrap()` directly.
 
@@ -138,7 +142,18 @@ response = client.chat.completions.create(
 ```
 
 Context segments (messages + tools) are captured automatically on
-every call — no separate extraction step.
+every call — no separate extraction step. `responses.create` is traced the
+same way.
+
+- **Streaming.** `stream=True` (and the `.stream()` helpers when the adapter
+  is installed) records one `llm` span when the stream ends. Chat Completions
+  only sends usage on a stream with `stream_options={"include_usage": True}`;
+  without it the span has the model and output but no tokens
+  (`metadata.usage_unavailable = true`).
+- **Tools.** Your code runs the tools, so the adapter infers a `tool` span
+  from the response that asked for a call and the next request that carries
+  its result (`metadata.timing = "inferred"`: the span covers the gap between
+  the two calls). A failed call records a failed `llm` span with the error.
 
 ### OpenAI Agents SDK, LangGraph, Claude Agent SDK
 
@@ -157,9 +172,11 @@ claude_agent_sdk.install()   # patches ClaudeSDKClient.receive_response
 
 Each emits an outer **agent** span, per-call **llm** + **tool** spans,
 and adapter-specific spans (LangGraph: nested chain spans; OpenAI
-Agents: **subagent.spawn**-shaped `handoff` spans; Claude Agent SDK:
-**subagent.spawn** spans for Task-tool fan-out and **hook** spans for
-`pre_tool`/`post_tool`/`on_error`).
+Agents: **subagent.spawn**-shaped `handoff` spans; Claude Agent SDK: a
+sub-agent launch is the `tool Agent` (or `Task`) span tagged
+`metadata.askl_is_spawn = true`, with the sub-agent's own agent, tool and
+llm spans nested under it. The Python adapter does not emit a span per
+customer hook; failed tools carry the tool's error text).
 
 ### Plain LangChain (chains, LLMs, tools, retrievers)
 

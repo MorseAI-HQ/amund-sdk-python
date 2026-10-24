@@ -1,5 +1,7 @@
 """Tests for pricing table and cost calculation."""
 
+import pytest
+
 from morse_ai.pricing import calculate_cost, get_model_pricing
 
 
@@ -104,3 +106,38 @@ class TestTierSuffixNeverFallsBackToBaseModel:
 
     def test_unknown_tier_is_unpriced_not_base_priced(self):
         assert get_model_pricing("gpt-5-micro") is None
+
+
+# WP-8 (2026-10-24): rows ported from the server catalog
+# (apps/api/apps/traces/data/model_pricing.json, fix/wp8-cost-catalog 95400119c).
+_WP8_ROWS = [
+    # (model id as an SDK sees it, input, output, cached)
+    ("gpt-6-astra", 10.0, 50.0, 1.0),
+    ("gpt-5.1-2025-11-13", 1.25, 10.0, 0.125),
+    ("gpt-5-pro", 15.0, 120.0, None),  # fell back to gpt-5 ($1.25/$10) before
+    ("o3-pro", 20.0, 80.0, None),
+    ("claude-mythos-5", 10.0, 50.0, 1.0),
+    ("gemini-3.1-pro", 2.0, 12.0, 0.2),
+    ("us.amazon.nova-pro-v1:0", 0.8, 3.2, 0.2),
+    ("meta.llama4-scout-17b-instruct-v1:0", 0.17, 0.66, None),
+    ("openai/gpt-oss-20b", 0.07, 0.3, None),
+]
+
+
+@pytest.mark.parametrize(("model", "inp", "out", "cached"), _WP8_ROWS)
+def test_wp8_catalog_rows_resolve(model, inp, out, cached):
+    pricing = get_model_pricing(model)
+    assert pricing is not None, model
+    assert pricing["input_per_mtok"] == inp
+    assert pricing["output_per_mtok"] == out
+    assert pricing.get("cached_per_mtok") == cached
+
+
+def test_wp8_mythos_cache_write_is_priced():
+    cost = calculate_cost(
+        input_tokens=0,
+        output_tokens=0,
+        model="claude-mythos-5",
+        cache_write_tokens=1_000_000,
+    )
+    assert cost == pytest.approx(12.5)

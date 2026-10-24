@@ -193,6 +193,32 @@ def _extract_token_usage(
     return None, None, None, None
 
 
+def _extract_cache_write_tokens(response: Any) -> int | None:
+    """Prompt-cache WRITE tokens from LangChain's standard ``usage_metadata``.
+
+    MHQ-1414: langchain-anthropic reports ``input_token_details.cache_creation``
+    alongside ``cache_read``; both are included in ``input_tokens``. Without
+    this the cache-write portion of a call was priced at the plain input rate.
+    """
+    try:
+        gens = getattr(response, "generations", None) or []
+        if gens and gens[0]:
+            msg = getattr(gens[0][0], "message", None)
+            um = getattr(msg, "usage_metadata", None) or {}
+            details = um.get("input_token_details") or {}
+            value = details.get("cache_creation")
+            if isinstance(value, int) and value > 0:
+                return value
+    except Exception:  # noqa: BLE001 — never break the host
+        pass
+    llm_output: dict[str, Any] = getattr(response, "llm_output", {}) or {}
+    usage = llm_output.get("usage") or {}
+    if not isinstance(usage, dict):
+        return None
+    value = usage.get("cache_creation_input_tokens")
+    return value if isinstance(value, int) and value > 0 else None
+
+
 def _extract_model(response: Any) -> str | None:
     """Best-effort model-name extraction from an LLMResult.
 
@@ -821,6 +847,22 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
                         ):
                             parts.append(block["text"])
                     output_text = "\n".join(parts)
+            # MHQ-1410: a tool-calling turn has empty text, so the span read
+            # {"text": ""}. Append the requested calls, matching the raw
+            # OpenAI/Anthropic adapters' "[tool_call:name] args" form.
+            msg = getattr(first[0], "message", None) if first else None
+            for tool_call in getattr(msg, "tool_calls", None) or []:
+                if not isinstance(tool_call, dict):
+                    continue
+                name = tool_call.get("name") or "tool"
+                args = tool_call.get("args")
+                label = f"[tool_call:{name}]"
+                if args:
+                    try:
+                        label = f"{label} {json.dumps(args, default=str)}"
+                    except (TypeError, ValueError):
+                        label = f"{label} {args}"
+                output_text = f"{output_text}\n{label}" if output_text else label
 
         # AGE-240: extract usage + cost across provider shapes.
         # LangChain integrations stash usage in different places:
@@ -842,6 +884,9 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
                 )
                 if cached_in:
                     traced._span.cached_input_tokens = cached_in
+            cache_write = _extract_cache_write_tokens(response)
+            if cache_write:
+                traced._span.cache_write_tokens = cache_write
             # Response model wins over the invocation-param model set in
             # on_llm_start: the response carries the fully-resolved version
             # string (e.g. gpt-5-nano-2025-08-07 vs the requested gpt-5-nano).
@@ -853,11 +898,14 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
             if model and (in_tok or out_tok):
                 from morse_ai.pricing import calculate_cost
 
+                # calculate_cost adds cache writes on top of input_tokens, and
+                # LangChain's input_tokens already includes them.
                 cost = calculate_cost(
-                    input_tokens=in_tok or 0,
+                    input_tokens=max((in_tok or 0) - (cache_write or 0), 0),
                     output_tokens=out_tok or 0,
                     model=model,
                     cached_input_tokens=cached_in or 0,
+                    cache_write_tokens=cache_write or 0,
                 )
                 if cost is not None:
                     traced._span.cost_usd = cost

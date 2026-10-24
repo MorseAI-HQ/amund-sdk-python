@@ -131,6 +131,10 @@ class _TraceState:
     identity_source: str | None = None
     app: str | None = None
     root_adopted: bool = False
+    # MHQ-1410: tool calls a raw-client LLM response asked for, keyed by the
+    # provider's call id, waiting for the request that carries their result.
+    # The OpenAI adapter turns each matched pair into a ``tool`` span.
+    pending_tool_calls: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 # ContextVar is the correct tool here: async-safe, no thread-local race
@@ -650,7 +654,7 @@ def link_record(key_type: str, key_value: str | int) -> None:
 
 
 @absorb_errors(fingerprint="morse_ai.set_prompt")
-def set_prompt(name: str, version: int | None = None) -> None:
+def set_prompt(name: str, version: int | str | None = None) -> None:
     """Record which named prompt (and optionally which version) this trace used.
 
         morse_ai.set_prompt("triage", version=7)
@@ -661,9 +665,10 @@ def set_prompt(name: str, version: int | None = None) -> None:
     Teams that keep prompts in code need not invent version numbers: the
     declared ``agent_version`` or the git revision identifies the change.
 
-    ``name`` must be 1-255 characters. ``version`` must be an int >= 1; any
-    other value is dropped and the name is kept. Invalid input is ignored
-    (debug log, never an exception). At most 20 references are kept per trace.
+    ``name`` must be 1-255 characters. ``version`` is an int >= 1 or a
+    whole-number string (``"3"``, ``"v3"``); any other value is dropped with a
+    one-time warning and the name is kept. Invalid input never raises. At most
+    20 references are kept per trace.
 
     Wire behaviour. The JSON path carries every distinct reference. The OTLP
     path carries one reference per span (``morse.prompt.name`` /

@@ -22,8 +22,35 @@ no-ops if the thread-local isn't initialized.
 from __future__ import annotations
 
 import threading
+from contextvars import ContextVar, Token
 
 _STATE = threading.local()
+
+# MHQ-1506: a framework adapter that records its own ``llm`` spans (the
+# openai-agents runner hooks) marks the call tree it runs. Provider-level
+# patches (the raw OpenAI client adapter) skip recording inside it so a model
+# call is never counted twice. A ContextVar, not the thread-local above: it
+# must follow the run into the asyncio tasks it creates and must not leak to
+# unrelated coroutines on the same loop thread.
+_LLM_OWNER: ContextVar[str | None] = ContextVar("morse_ai_llm_owner", default=None)
+
+
+def set_llm_owner(name: str) -> Token[str | None]:
+    """Mark ``name`` as recording the LLM calls made in this context."""
+    return _LLM_OWNER.set(name)
+
+
+def reset_llm_owner(token: Token[str | None]) -> None:
+    """Undo ``set_llm_owner``. Never raises (a cross-context reset is ignored)."""
+    try:
+        _LLM_OWNER.reset(token)
+    except (ValueError, RuntimeError):
+        _LLM_OWNER.set(None)
+
+
+def get_llm_owner() -> str | None:
+    """The framework recording LLM calls in this context, or ``None``."""
+    return _LLM_OWNER.get()
 
 
 def set_active_framework(name: str) -> None:

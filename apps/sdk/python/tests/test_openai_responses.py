@@ -104,10 +104,12 @@ def test_wrap_responses_captures_input_instructions_and_output():
         )
 
     span = _llm_spans()[0]
+    # MHQ-1410: tool-loop items are kept so the input panel shows the round trip.
     assert span["input_data"] == {
         "messages": [
             {"role": "system", "content": "You are terse."},
             {"role": "user", "content": "first"},
+            {"role": "tool", "content": "x", "tool_call_id": "c1"},
         ]
     }
     assert span["output_data"] == {"content": "hello there"}
