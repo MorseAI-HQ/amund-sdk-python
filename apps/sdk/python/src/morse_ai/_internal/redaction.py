@@ -42,7 +42,17 @@ from typing import Any
 
 _PATTERN_SOURCES: dict[str, str] = {
     "api_key_prefixed": (
+        # WP-12 parity with the server: ``rk_`` restricted keys, ``whsec_`` webhook
+        # secrets, ``github_pat_`` fine-grained PATs and Resend keys
+        # (``re_<id>_<secret>``, which must carry a digit and an uppercase letter so
+        # snake_case identifiers never match). ``sk-ant-`` / ``sk-proj-`` are
+        # covered by ``sk-[A-Za-z0-9_-]{20,}``. This pattern is compiled
+        # case-sensitively (see ``_COMPILED``) exactly like the server's.
         r"\b(?:sk-[A-Za-z0-9_-]{20,}|sk_(?:live|test)_[A-Za-z0-9]{20,}|"
+        r"rk_(?:live|test)_[A-Za-z0-9]{20,}|whsec_[A-Za-z0-9]{24,}|"
+        r"github_pat_[A-Za-z0-9_]{30,}|"
+        r"re_(?=[A-Za-z0-9_]{24,})(?=[A-Za-z0-9_]*\d)(?=[A-Za-z0-9_]*[A-Z])"
+        r"[A-Za-z0-9]+(?:_[A-Za-z0-9]+)?|"
         r"(?:mhq|av)_(?:pk_)?[\s\S]{0,48}_[A-Fa-f0-9]{64}|"
         r"mhq_[A-Za-z0-9]{20,}|av_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{36}|gho_[A-Za-z0-9]{36}|"
         r"ghu_[A-Za-z0-9]{36}|ghs_[A-Za-z0-9]{36}|ghr_[A-Za-z0-9]{36}|"
@@ -134,12 +144,25 @@ MAX_EXTRA_PATTERN_LEN: int = 256
 #: Replacement label used for any customer-supplied custom pattern.
 CUSTOM_REPLACEMENT: str = "[REDACTED:custom]"
 
-#: Maximum recursion depth when walking nested attribute structures.
-MAX_WALK_DEPTH: int = 10
+#: Maximum nesting depth walked in attribute structures. Matches the server
+#: (``apps.core.redaction.services.MAX_JSON_DEPTH``) and the ingest limit: a
+#: top-level value is depth 0 and a string inside 64 nested containers is depth
+#: 64, which is still walked. Anything deeper is replaced by ``DEPTH_MARKER``
+#: (fail closed) rather than passed through unredacted.
+MAX_WALK_DEPTH: int = 64
+#: Replaces a subtree nested deeper than ``MAX_WALK_DEPTH`` (same as the server).
+DEPTH_MARKER: str = "[REDACTED:depth]"
 
 # Pre-compile the canonical patterns once at module import.
+# ``api_key_prefixed`` is case-sensitive, like the server's (the Resend branch
+# needs a real uppercase letter; ``AKIA`` is a literal prefix).
+_CASE_SENSITIVE_PATTERNS = frozenset({"api_key_prefixed"})
 _COMPILED: dict[str, re.Pattern[str]] = {
-    key: re.compile(_PATTERN_SOURCES[key], re.IGNORECASE) for key in PATTERN_KEYS
+    key: re.compile(
+        _PATTERN_SOURCES[key],
+        0 if key in _CASE_SENSITIVE_PATTERNS else re.IGNORECASE,
+    )
+    for key in PATTERN_KEYS
 }
 
 
@@ -273,14 +296,16 @@ class RedactionConfig:
         """Redact an attribute value of arbitrary shape.
 
         - ``str`` → ``redact_string``
-        - ``dict`` / ``list`` / ``tuple`` → walk in place (depth-bounded)
+        - ``dict`` / ``list`` / ``tuple`` → walk (depth-bounded)
         - everything else (numbers, booleans, ``None``, custom objects) → pass
           through unchanged
+        - any node nested deeper than ``MAX_WALK_DEPTH`` → ``DEPTH_MARKER``
+          (fail closed, same as the server)
         """
         if not self.enabled and not self.extra_patterns:
             return value
         if _depth > MAX_WALK_DEPTH:
-            return value
+            return DEPTH_MARKER
         if isinstance(value, str):
             return self.redact_string(value)
         if isinstance(value, dict):
@@ -392,6 +417,7 @@ def _credit_card_sub(match: re.Match[str]) -> str:
 __all__ = [
     "CUSTOM_REPLACEMENT",
     "DEFAULT_OFF_PATTERNS",
+    "DEPTH_MARKER",
     "DISABLED_CONFIG",
     "MANDATORY_PATTERNS",
     "MAX_EXTRA_PATTERNS",

@@ -24,9 +24,11 @@ import morse_ai
 from morse_ai._internal.redaction import (
     CUSTOM_REPLACEMENT,
     DEFAULT_OFF_PATTERNS,
+    DEPTH_MARKER,
     MANDATORY_PATTERNS,
     MAX_EXTRA_PATTERN_LEN,
     MAX_EXTRA_PATTERNS,
+    MAX_WALK_DEPTH,
     PATTERN_KEYS,
     RedactionConfig,
     redact_string,
@@ -259,20 +261,43 @@ def test_redact_value_preserves_non_string_leaves(
     assert default_config.redact_value(payload) == payload
 
 
+def _nest(leaf: object, containers: int) -> object:
+    deep = leaf
+    for _ in range(containers):
+        deep = {"x": deep}
+    return deep
+
+
+def _leaf_of(value: object) -> object:
+    while isinstance(value, dict):
+        value = value["x"]
+    return value
+
+
 @pytest.mark.req("PHASE-6F-G02")
-def test_redact_value_depth_bound() -> None:
-    # Build a structure deeper than MAX_WALK_DEPTH and confirm we don't recurse
-    # forever — the deepest leaves remain untouched (acceptable trade-off vs. a
-    # pathological JSON DoS).
+def test_redact_value_depth_limit_matches_server() -> None:
+    """Walk limit is 64 (server parity): a leaf inside 64 containers is still
+    redacted; one inside 65 becomes ``[REDACTED:depth]`` (fail closed)."""
     config = RedactionConfig.build()
     leaf = "jane@example.com"
-    deep: object = leaf
-    for _ in range(20):
-        deep = {"x": deep}
+    assert MAX_WALK_DEPTH == 64
+    assert _leaf_of(config.redact_value(_nest(leaf, 64))) == "[REDACTED:email]"
+    assert _leaf_of(config.redact_value(_nest(leaf, 65))) == DEPTH_MARKER
+    # Non-string scalars past the limit are replaced too: the server does the same.
+    assert _leaf_of(config.redact_value(_nest(7, 65))) == DEPTH_MARKER
+    assert _leaf_of(config.redact_value(_nest(7, 64))) == 7
+
+
+@pytest.mark.req("PHASE-6F-G02")
+def test_redact_value_depth_limit_covers_lists_and_tuples() -> None:
+    config = RedactionConfig.build()
+    deep: object = "jane@example.com"
+    for _ in range(65):
+        deep = [deep]
     out = config.redact_value(deep)
-    # We don't assert exact shape — just that no exception was raised and the
-    # top-level dict is still a dict.
-    assert isinstance(out, dict)
+    while isinstance(out, list) and isinstance(out[0], list):
+        out = out[0]
+    assert out == [DEPTH_MARKER]
 
 
 # ---------------------------------------------------------------------------
@@ -587,3 +612,34 @@ def test_ids_are_not_redacted_as_phone_or_card(text: str) -> None:
 def test_pii_next_to_ids_is_still_redacted(text: str, expected: str) -> None:
     config = RedactionConfig.build(enabled=True)
     assert redact_string(text, config) == expected
+
+
+# ---------------------------------------------------------------------------
+# WP-12 provider-key parity table, shared with the TS SDK and the server
+# ---------------------------------------------------------------------------
+
+_PROVIDER_KEYS_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "shared-fixtures"
+    / "redaction_provider_keys.json"
+)
+
+
+def _load_provider_key_rows() -> list[dict[str, str]]:
+    with _PROVIDER_KEYS_PATH.open("r", encoding="utf-8") as fp:
+        return json.load(fp)["rows"]
+
+
+@pytest.mark.req("PHASE-6F-G02")
+@pytest.mark.parametrize("row", _load_provider_key_rows(), ids=lambda r: r["id"])
+def test_provider_key_parity_table(row: dict[str, str]) -> None:
+    """Default redaction matches the server byte for byte on every row."""
+    config = RedactionConfig.build()
+    assert redact_string(row["input"], config) == row["expected_output"]
+
+
+@pytest.mark.req("PHASE-6F-G02")
+def test_provider_key_parity_table_is_not_empty() -> None:
+    rows = _load_provider_key_rows()
+    assert any(r["input"] != r["expected_output"] for r in rows)
+    assert any(r["input"] == r["expected_output"] for r in rows)
