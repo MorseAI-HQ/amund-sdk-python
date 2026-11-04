@@ -9,10 +9,10 @@ The Python and TypeScript SDKs version **independently** — they share `0.4.0` 
 their first public release because they reached feature parity there, not
 because they are released in lockstep. Expect the numbers to diverge.
 
-## [0.7.0] — Unreleased (release candidate `0.7.0rc1`)
+## [0.7.0] — 2026-11-03
 
-`0.7.0` was never published (PyPI has `0.6.0`), so everything below ships together as `0.7.0`.
-The release goes out as `0.7.0rc1` first (SDK_PUBLISHING.md §1.1).
+Everything below shipped first as `0.7.0rc1` (2026-10-24) and was soaked on the testbed apps
+against Morse dev before this release (SDK_PUBLISHING.md §1.1).
 
 ### Fixed — client-side redaction matches the server (WP-12)
 
