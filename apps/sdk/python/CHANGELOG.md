@@ -11,6 +11,12 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ## [Unreleased]
 
+### Fixed — Strands traces report the Morse SDK version (MHQ-1740)
+
+- Spans exported through the SDK's OTel provider now carry the `morse.sdk.version` resource
+  attribute. Framework spans with no Morse scope (Strands) previously showed `sdk_version`
+  `otlp/http` in Morse.
+
 ### Fixed — Azure OpenAI spans are priced on the canonical model (MHQ-1741)
 
 - **Azure Responses API calls were unpriced.** Azure echoes the _deployment name_ as

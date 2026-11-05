@@ -166,6 +166,9 @@ def test_zero_code_agent_spans_reach_the_morse_provider(engine):
     assert scope.version and scope.version != "unknown"
     # Resource is the Morse engine's (service.name pinned, not Strands').
     assert spans[0].resource.attributes["service.name"] == "unknown_service"
+    from morse_ai._version import __version__
+
+    assert spans[0].resource.attributes["morse.sdk.version"] == __version__
 
 
 @pytest.mark.req("MHQ-133")

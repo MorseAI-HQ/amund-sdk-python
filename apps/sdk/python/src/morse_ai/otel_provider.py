@@ -539,6 +539,9 @@ class _OtelEngine:
             # ``morse.process.service_name``; the agent travels as the
             # root-span ``morse.agent`` attribute instead.
             resource_attrs: dict[str, Any] = {"service.name": "unknown_service"}
+            # MHQ-1740: framework spans routed through this provider (Strands)
+            # carry no Morse scope, so the server reads the SDK release here.
+            resource_attrs["morse.sdk.version"] = __version__
             proc_service = env_service_name()
             if proc_service:
                 resource_attrs["morse.process.service_name"] = proc_service
