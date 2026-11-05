@@ -27,12 +27,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -138,12 +140,17 @@ class OpenAIAdapter(BaseAdapter):
     The adapter auto-detects which API shape is present.
     """
 
-    def extract(self, response: Any) -> dict[str, Any]:
-        """Extract telemetry from an OpenAI response."""
+    def extract(self, response: Any, *, model: str | None = None) -> dict[str, Any]:
+        """Extract telemetry from an OpenAI response.
+
+        ``model`` overrides ``response.model`` for the span and for pricing
+        (MHQ-1741: Azure's Responses API echoes the deployment name there).
+        """
         result: dict[str, Any] = {}
 
         # Model
-        model = getattr(response, "model", None)
+        if not model:
+            model = getattr(response, "model", None)
         if model:
             result["model"] = str(model)
 
@@ -522,6 +529,161 @@ def _responses_thread_facts(
     return facts
 
 
+# ---------------------------------------------------------------------------
+# MHQ-1741 — Azure OpenAI. An Azure call names a *deployment* (``model=`` is
+# the deployment name, e.g. "morse-hr-mini"), and the Responses API echoes
+# that deployment name back as ``response.model`` (measured 2026-11-04 on
+# api-version 2025-04-01-preview and on /openai/v1, streamed and not), so the
+# span was unpriceable. Chat Completions bodies carry the canonical dated model
+# ("gpt-4.1-mini-2025-04-14") but the deployment was lost. Every Azure
+# response, both APIs, carries the canonical model in the
+# ``x-ms-served-model`` header; a response hook on the client's httpx client
+# copies it into a per-call slot. The span model (used for pricing) is that
+# header, else a body model that differs from the deployment, else the
+# deployment name as before. The deployment is kept as metadata.
+# ---------------------------------------------------------------------------
+
+_AZURE_PROVIDER = "azure_openai"
+_AZURE_SERVED_MODEL_HEADER = "x-ms-served-model"
+_AZURE_HOST_SUFFIXES = (
+    ".openai.azure.com",
+    ".cognitiveservices.azure.com",
+    ".services.ai.azure.com",
+    ".openai.azure.us",
+    ".openai.azure.cn",
+)
+_AZURE_CLIENT_CLASSES = {"AzureOpenAI", "AsyncAzureOpenAI", "BaseAzureClient"}
+_AZURE_HOOK_MARKER = "_morse_ai_azure_hook"
+_DEPLOYMENT_IN_PATH = re.compile(r"/deployments/([^/?#]+)")
+
+# Set for the duration of one traced Azure call; the httpx hook writes into it.
+_azure_slot: ContextVar[dict[str, Any] | None] = ContextVar(
+    "morse_ai_openai_azure_slot", default=None
+)
+
+
+def _capture_served_model(response: Any) -> None:
+    slot = _azure_slot.get()
+    if slot is None:
+        return
+    try:
+        served = response.headers.get(_AZURE_SERVED_MODEL_HEADER)
+    except Exception:  # noqa: BLE001
+        return
+    if isinstance(served, str) and served:
+        slot["served_model"] = served
+
+
+def _sync_served_model_hook(response: Any) -> None:
+    _capture_served_model(response)
+
+
+async def _async_served_model_hook(response: Any) -> None:
+    _capture_served_model(response)
+
+
+def _openai_client_of(resource: Any) -> Any:
+    """The ``OpenAI``/``AzureOpenAI`` client behind a resource
+    (``client.responses``, ``client.chat.completions``)."""
+    return getattr(resource, "_client", None) if resource is not None else None
+
+
+def _is_azure_client(client: Any) -> bool:
+    if client is None:
+        return False
+    if {c.__name__ for c in type(client).__mro__} & _AZURE_CLIENT_CLASSES:
+        return True
+    # A plain OpenAI(base_url="https://<res>.openai.azure.com/openai/v1/").
+    try:
+        host = (urlsplit(str(client.base_url)).hostname or "").lower()
+    except Exception:  # noqa: BLE001
+        return False
+    return host.endswith(_AZURE_HOST_SUFFIXES)
+
+
+def _ensure_served_model_hook(client: Any) -> None:
+    """Add the served-model response hook to the client's httpx client, once.
+
+    Appends to the existing hooks (the customer's own stay first and keep
+    running); the hook is a no-op outside a traced Azure call.
+    """
+    http = getattr(client, "_client", None)
+    if http is None or getattr(http, _AZURE_HOOK_MARKER, False):
+        return
+    try:
+        import httpx
+
+        hooks = http.event_hooks
+        hook = (
+            _async_served_model_hook
+            if isinstance(http, httpx.AsyncClient)
+            else _sync_served_model_hook
+        )
+        http.event_hooks = {
+            "request": list(hooks.get("request", [])),
+            "response": [*hooks.get("response", []), hook],
+        }
+        setattr(http, _AZURE_HOOK_MARKER, True)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("morse_ai: azure served-model hook not attached: %s", exc)
+
+
+def _azure_call_slot(resource: Any, kwargs: dict[str, Any]) -> dict[str, Any] | None:
+    """Per-call Azure facts (deployment), or None for a non-Azure client."""
+    try:
+        client = _openai_client_of(resource)
+        if not _is_azure_client(client):
+            return None
+        _ensure_served_model_hook(client)
+        deployment = None
+        match = _DEPLOYMENT_IN_PATH.search(str(getattr(client, "base_url", "")))
+        if match:
+            deployment = match.group(1)  # AzureOpenAI(azure_deployment=...)
+        elif isinstance(kwargs.get("model"), str) and kwargs["model"]:
+            deployment = kwargs["model"]
+        return {"deployment": deployment}
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("morse_ai: azure client detection swallowed: %s", exc)
+        return None
+
+
+def _note_raw_headers(slot: dict[str, Any] | None, response: Any) -> None:
+    """``with_raw_response`` hands back the headers directly (LiteLLM path)."""
+    if (
+        slot is None
+        or slot.get("served_model")
+        or not _is_legacy_raw_response(response)
+    ):
+        return
+    try:
+        served = response.headers.get(_AZURE_SERVED_MODEL_HEADER)
+    except Exception:  # noqa: BLE001
+        return
+    if isinstance(served, str) and served:
+        slot["served_model"] = served
+
+
+def _azure_model_and_metadata(
+    azure: dict[str, Any], response: Any
+) -> tuple[str | None, dict[str, Any]]:
+    """``(span model, metadata)`` for an Azure call (see the section comment)."""
+    deployment = azure.get("deployment")
+    served = azure.get("served_model")
+    body = _field(response, "model")
+    body = body if isinstance(body, str) and body else None
+    metadata: dict[str, Any] = {"provider": _AZURE_PROVIDER}
+    if deployment:
+        metadata["azure_deployment"] = deployment
+    if served:
+        metadata["azure_model_source"] = "served_model_header"
+        return served, metadata
+    if body and body != deployment:
+        metadata["azure_model_source"] = "response"
+        return body, metadata
+    metadata["azure_model_source"] = "deployment"
+    return body or deployment, metadata
+
+
 def _record_llm_span_for_response(
     name: str,
     response: Any,
@@ -533,13 +695,18 @@ def _record_llm_span_for_response(
     status: str = "completed",
     error: BaseException | None = None,
     extra_metadata: dict[str, Any] | None = None,
+    azure: dict[str, Any] | None = None,
 ) -> None:
     state = get_active_trace()
     if state is None:
         return
     try:
         adapter = OpenAIAdapter()
-        telemetry = adapter.extract(response)
+        azure_metadata: dict[str, Any] = {}
+        model_override = None
+        if azure is not None:
+            model_override, azure_metadata = _azure_model_and_metadata(azure, response)
+        telemetry = adapter.extract(response, model=model_override)
         thread_facts: dict[str, str] = {}
         if api == _RESPONSES:
             thread_facts = _responses_thread_facts(response, kwargs)
@@ -575,6 +742,7 @@ def _record_llm_span_for_response(
             output_data={"content": output_text} if output_text else None,
         )
         metadata: dict[str, Any] = dict(thread_facts)
+        metadata.update(azure_metadata)
         if telemetry.get("metadata"):
             metadata.update(telemetry["metadata"])
         if extra_metadata:
@@ -769,13 +937,15 @@ def _failed_response(kwargs: dict[str, Any]) -> Any:
 class _CallState:
     """Call-time bookkeeping for one traced request."""
 
-    def __init__(self, api: str, kwargs: dict[str, Any]) -> None:
+    def __init__(self, api: str, kwargs: dict[str, Any], resource: Any = None) -> None:
         self.api = api
         self.name = _SPAN_NAMES[api]
         self.kwargs = kwargs
         self.start_mono = time.monotonic()
         self.started_at_iso = datetime.now(UTC).isoformat()
         self.done = False
+        # MHQ-1741: Azure deployment + served model; None for other clients.
+        self.azure = _azure_call_slot(resource, kwargs)
 
     def record(
         self,
@@ -797,6 +967,7 @@ class _CallState:
             status="failed" if error is not None else "completed",
             error=error,
             extra_metadata=extra_metadata,
+            azure=self.azure,
         )
 
     def record_in_trace(self, response: Any, **kw: Any) -> None:
@@ -814,23 +985,40 @@ class _CallState:
             clear_active_framework()
 
 
+@contextmanager
+def _azure_capture(call_state: _CallState) -> Iterator[None]:
+    """Expose the call's Azure slot to the httpx hook while the request runs."""
+    if call_state.azure is None:
+        yield
+        return
+    token = _azure_slot.set(call_state.azure)
+    try:
+        yield
+    finally:
+        _azure_slot.reset(token)
+
+
 def _after_call(call_state: _CallState, response: Any) -> Any:
     """Record a returned (non-failing) response; wrap a stream instead."""
+    _note_raw_headers(call_state.azure, response)
     if call_state.kwargs.get("stream"):
         return _wrap_stream_result(response, call_state)
     call_state.record(_parsed(response))
     return response
 
 
-def _traced_call_sync(call: Any, kwargs: dict[str, Any], api: str) -> Any:
+def _traced_call_sync(
+    call: Any, kwargs: dict[str, Any], api: str, resource: Any = None
+) -> Any:
     if _framework_records_call():
         return call()
-    call_state = _CallState(api, kwargs)
+    call_state = _CallState(api, kwargs, resource)
 
     def _run() -> Any:
         _record_tool_spans_for_request(kwargs, api)
         try:
-            response = call()
+            with _azure_capture(call_state):
+                response = call()
         except BaseException as exc:
             # MHQ-1410: a failed call keeps an llm span (model, latency, error).
             call_state.record(None, error=exc)
@@ -849,15 +1037,18 @@ def _traced_call_sync(call: Any, kwargs: dict[str, Any], api: str) -> Any:
         clear_active_framework()
 
 
-async def _traced_call_async(call: Any, kwargs: dict[str, Any], api: str) -> Any:
+async def _traced_call_async(
+    call: Any, kwargs: dict[str, Any], api: str, resource: Any = None
+) -> Any:
     if _framework_records_call():
         return await call()
-    call_state = _CallState(api, kwargs)
+    call_state = _CallState(api, kwargs, resource)
 
     async def _run() -> Any:
         _record_tool_spans_for_request(kwargs, api)
         try:
-            response = await call()
+            with _azure_capture(call_state):
+                response = await call()
         except BaseException as exc:
             call_state.record(None, error=exc)
             raise
@@ -1140,7 +1331,10 @@ class _WrappedCompletions:
         if _install_active():
             return self._av_inner.create(*args, **kwargs)
         return _traced_call_sync(
-            lambda: self._av_inner.create(*args, **kwargs), kwargs, self._av_api
+            lambda: self._av_inner.create(*args, **kwargs),
+            kwargs,
+            self._av_api,
+            self._av_inner,
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -1156,7 +1350,10 @@ class _WrappedAsyncCompletions:
         if _install_active():
             return await self._av_inner.create(*args, **kwargs)
         return await _traced_call_async(
-            lambda: self._av_inner.create(*args, **kwargs), kwargs, self._av_api
+            lambda: self._av_inner.create(*args, **kwargs),
+            kwargs,
+            self._av_api,
+            self._av_inner,
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -1255,7 +1452,9 @@ def wrap(client: ClientT) -> ClientT:
 
 def _wrap_create(original: Any, api: str = _CHAT) -> Any:
     def traced_create(self: Any, *args: Any, **kwargs: Any) -> Any:
-        return _traced_call_sync(lambda: original(self, *args, **kwargs), kwargs, api)
+        return _traced_call_sync(
+            lambda: original(self, *args, **kwargs), kwargs, api, self
+        )
 
     traced_create.__wrapped__ = original  # type: ignore[attr-defined]
     return traced_create
@@ -1264,7 +1463,7 @@ def _wrap_create(original: Any, api: str = _CHAT) -> Any:
 def _wrap_acreate(original: Any, api: str = _CHAT) -> Any:
     async def traced_acreate(self: Any, *args: Any, **kwargs: Any) -> Any:
         return await _traced_call_async(
-            lambda: original(self, *args, **kwargs), kwargs, api
+            lambda: original(self, *args, **kwargs), kwargs, api, self
         )
 
     traced_acreate.__wrapped__ = original  # type: ignore[attr-defined]

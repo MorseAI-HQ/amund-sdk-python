@@ -9,6 +9,29 @@ The Python and TypeScript SDKs version **independently** — they share `0.4.0` 
 their first public release because they reached feature parity there, not
 because they are released in lockstep. Expect the numbers to diverge.
 
+## [Unreleased]
+
+### Fixed — Azure OpenAI spans are priced on the canonical model (MHQ-1741)
+
+- **Azure Responses API calls were unpriced.** Azure echoes the _deployment name_ as
+  `response.model` on the Responses API (measured 2026-11-04 on api-version
+  `2025-04-01-preview` and on `/openai/v1`, streamed and not), so an `AsyncAzureOpenAI`
+  `responses.create(model="morse-hr-mini")` span recorded `model="morse-hr-mini"` and cost $0.
+  Every Azure response, on both APIs, carries the canonical dated model in the
+  `x-ms-served-model` header (`gpt-4.1-mini-2025-04-14`); the adapter now reads it and uses it
+  as the span model and for pricing.
+- **The deployment is no longer lost on Chat Completions.** Azure spans now carry
+  `metadata.provider = "azure_openai"`, `metadata.azure_deployment` and
+  `metadata.azure_model_source` (`served_model_header`, `response` or `deployment` — the last
+  only when neither the header nor a differing body model is available, i.e. the old behaviour).
+- Covers `chat.completions.create` and `responses.create`, sync, async and streaming,
+  `with_raw_response` (LiteLLM's Azure path), `wrap()` and the zero-code `install()`.
+  Detection: `AzureOpenAI` / `AsyncAzureOpenAI`, or any OpenAI client whose `base_url` is an
+  Azure OpenAI host (`*.openai.azure.com`, `*.cognitiveservices.azure.com`,
+  `*.services.ai.azure.com`). The header is read by a response hook appended (once) to the
+  Azure client's own httpx client; the customer's hooks keep running and the returned objects
+  are unchanged. Non-Azure clients are untouched.
+
 ## [0.8.0] — 2026-11-04
 
 Everything below shipped first as `0.8.0rc1` (2026-11-04) and was acceptance-tested on the

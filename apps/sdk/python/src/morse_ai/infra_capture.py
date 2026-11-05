@@ -562,6 +562,9 @@ def disable_django_db_capture() -> None:
 _DEFAULT_EXCLUDED_HOSTS = {
     "api.anthropic.com",
     "api.openai.com",
+    # Azure OpenAI (*.openai.azure.com): the OpenAI adapter records these as
+    # priced `llm` spans (MHQ-1741), so an `http` sibling would be a duplicate.
+    "openai.azure.com",
     "generativelanguage.googleapis.com",  # Gemini
     "api.cohere.ai",
     "api.mistral.ai",
