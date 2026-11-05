@@ -9,6 +9,31 @@ The Python and TypeScript SDKs version **independently** — they share `0.4.0` 
 their first public release because they reached feature parity there, not
 because they are released in lockstep. Expect the numbers to diverge.
 
+## [Unreleased]
+
+### Added — zero-code google-genai tracing (MHQ-1506)
+
+- **`google-genai` joins the auto-detect map.** With `MORSE_API_KEY` + `init()`,
+  `client.models.generate_content`, `generate_content_stream` and the async
+  `client.aio.models` variants are traced for the Gemini API and Vertex AI
+  (`vertexai=True`). New optional extra: `morse-ai[google_genai]` (`google-genai>=1.0.0`).
+- **One `llm` span per billed request.** The adapter patches the SDK's per-request
+  methods, so automatic function calling and continuation round trips each get their own
+  span and cost (the public call only returns the last request's usage). Outside an open
+  `run()`, one `generate_content` call (AFC loop included) is one trace; each streamed hop
+  records its own.
+- **Tokens and cost:** input = `prompt_token_count` + `tool_use_prompt_token_count`;
+  output = `candidates_token_count` + `thoughts_token_count` (thinking is billed as
+  output), also sent as `reasoning_tokens`; `cached_content_token_count` is sent as
+  `cached_input_tokens` and priced at the cached rate. `metadata.provider` is `gemini`
+  or `vertex_ai`, with `metadata.location` on Vertex.
+- **Streams** record one span when the stream ends, with the final usage, the joined
+  text and `metadata.time_to_first_chunk_ms`. **Failed calls** record a failed `llm`
+  span. **Function calls** become inferred `tool` spans (manual loops and AFC).
+- Calls a framework adapter already records (an LLM owner, or an open framework `llm`
+  span such as LangChain under `MorseCallbackHandler`) are not recorded twice. Google ADK
+  has no Morse adapter, so its model calls are recorded by this one.
+
 ## [0.7.0] — 2026-11-03
 
 Everything below shipped first as `0.7.0rc1` (2026-10-24) and was soaked on the testbed apps

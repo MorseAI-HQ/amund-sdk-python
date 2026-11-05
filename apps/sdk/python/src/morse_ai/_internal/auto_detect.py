@@ -102,6 +102,11 @@ def _adapter_targets() -> dict[str, str]:
     if _importable("openai"):
         targets["openai"] = "morse_ai.adapters.openai"
 
+    # MHQ-1506: google-genai (Gemini API and Vertex AI). ``google`` is a
+    # namespace package, so the lazy hook targets ``google.genai`` itself.
+    if _importable("google.genai"):
+        targets["google.genai"] = "morse_ai.adapters.google_genai"
+
     # LangGraph is preferred when available — registers under "langgraph" so
     # the lazy hook fires on `import langgraph` regardless of order.
     if _importable("langgraph"):

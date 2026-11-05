@@ -44,6 +44,9 @@ langgraph = ["langgraph>=1.0", "langchain-core>=1.0"]
 # 0.1.0 to match the TS SDK's peer range. NOT yet exercised against the real
 # package in CI — MHQ-930 adds the canary lane that would prove this floor.
 claude_agent_sdk = ["claude-agent-sdk>=0.1.0"]
+# MHQ-1506 — google-genai adapter (Gemini API + Vertex AI). The private
+# per-request methods it patches exist across 1.x and 2.x.
+google_genai = ["google-genai>=1.0.0"]
 all = [
     "anthropic>=0.40.0",
     "openai>=1.50.0",
@@ -51,6 +54,7 @@ all = [
     "langgraph>=1.0",
     "langchain-core>=1.0",
     "claude-agent-sdk>=0.1.0",
+    "google-genai>=1.0.0",
 ]
 dev = [
     "pytest>=8.0",

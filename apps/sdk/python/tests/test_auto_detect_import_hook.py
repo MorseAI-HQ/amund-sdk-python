@@ -132,3 +132,25 @@ def test_zero_code_setup_patches_raw_openai_imported_after_init() -> None:
     assert "INSTALLED True" in proc.stdout
     assert "CHAT True" in proc.stdout
     assert "RESPONSES True" in proc.stdout
+
+
+@pytest.mark.req("MHQ-1506")
+@pytest.mark.parametrize("before_init", [False, True])
+def test_zero_code_setup_patches_google_genai(before_init: bool) -> None:
+    """``google.genai`` is traced whether it is imported before or after init()."""
+    pytest.importorskip("google.genai")
+    imp = "from google import genai\n"
+    proc = _run(
+        (imp if before_init else "")
+        + "import morse_ai\nmorse_ai.init()\n"
+        + ("" if before_init else imp)
+        + "from google.genai.models import AsyncModels, Models\n"
+        + 'print("INSTALLED", getattr(genai, "_morse_ai_installed", False))\n'
+        + 'print("SYNC", hasattr(Models._generate_content, "__wrapped__"))\n'
+        + "stream = AsyncModels._generate_content_stream\n"
+        + 'print("ASYNC", hasattr(stream, "__wrapped__"))\n'
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "INSTALLED True" in proc.stdout
+    assert "SYNC True" in proc.stdout
+    assert "ASYNC True" in proc.stdout
