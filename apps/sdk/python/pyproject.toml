@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "morse-ai"
-version = "0.8.0rc1"
+version = "0.8.0"
 description = "Unified observability for AI agents and infrastructure. One SDK."
 readme = "README.md"
 license = "MIT"
