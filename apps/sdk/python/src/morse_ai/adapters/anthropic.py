@@ -56,6 +56,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from morse_ai._internal.active_framework import (
     clear_active_framework,
+    get_llm_owner,
     set_active_framework,
 )
 from morse_ai._internal.errors import absorb_errors
@@ -870,8 +871,12 @@ def _inside_framework_llm_span() -> bool:
     MHQ-1415: a framework that owns the model call (LangChain's
     ``ChatAnthropic`` under ``MorseCallbackHandler``) opens its own ``llm``
     span and records the tokens from the response. The zero-code Anthropic
-    patch underneath must not record the same call a second time.
+    patch underneath must not record the same call a second time. MHQ-133:
+    the same holds when a framework marks itself the LLM owner (Strands'
+    ``AnthropicModel`` while Strands traces the model call).
     """
+    if get_llm_owner() is not None:
+        return True
     state = get_active_trace()
     if state is None or not state.span_stack:
         return False

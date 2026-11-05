@@ -102,6 +102,10 @@ def _adapter_targets() -> dict[str, str]:
     if _importable("openai"):
         targets["openai"] = "morse_ai.adapters.openai"
 
+    # MHQ-133: AWS Strands Agents traces itself with OpenTelemetry; the
+    # adapter routes those spans to Morse (no SpanData rebuilding).
+    if _importable("strands"):
+        targets["strands"] = "morse_ai.adapters.strands"
     # MHQ-1506: google-genai (Gemini API and Vertex AI). ``google`` is a
     # namespace package, so the lazy hook targets ``google.genai`` itself.
     if _importable("google.genai"):

@@ -134,6 +134,25 @@ def test_zero_code_setup_patches_raw_openai_imported_after_init() -> None:
     assert "RESPONSES True" in proc.stdout
 
 
+@pytest.mark.req("MHQ-133")
+@pytest.mark.parametrize("before_init", [False, True])
+def test_zero_code_setup_routes_strands(before_init: bool) -> None:
+    """Strands' tracer is routed whether Strands is imported before or after."""
+    pytest.importorskip("strands")
+    imp = "import strands\nfrom strands import Agent  # noqa: F401\n"
+    proc = _run(
+        (imp if before_init else "")
+        + "import morse_ai\nmorse_ai.init()\n"
+        + ("" if before_init else imp)
+        + "from strands.telemetry.tracer import get_tracer\n"
+        + 'print("INSTALLED", getattr(strands, "_morse_ai_installed", False))\n'
+        + 'print("ROUTED", type(get_tracer().tracer).__name__)\n'
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "INSTALLED True" in proc.stdout
+    assert "ROUTED _RoutingTracer" in proc.stdout
+
+
 @pytest.mark.req("MHQ-1506")
 @pytest.mark.parametrize("before_init", [False, True])
 def test_zero_code_setup_patches_google_genai(before_init: bool) -> None:

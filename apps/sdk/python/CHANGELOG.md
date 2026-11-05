@@ -11,6 +11,28 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ## [Unreleased]
 
+### Added — zero-code AWS Strands Agents tracing (MHQ-133)
+
+- **`strands` joins the auto-detect map.** With `MORSE_API_KEY` + `init()`, the spans Strands
+  Agents emits through its own OpenTelemetry tracer (`invoke_agent`, `execute_event_loop_cycle`,
+  `chat`, `execute_tool`, `invoke_swarm` / `invoke_graph`) are exported to Morse's OTLP endpoint,
+  where the GenAI conventions are mapped to agent / llm / tool spans and priced server-side
+  (Bedrock ids such as `us.amazon.nova-micro-v1:0` included). New optional extra:
+  `morse-ai[strands]` (`strands-agents>=1.0.0`).
+- **Nothing global changes.** When the app has no OTel SDK provider, Strands' spans are started on
+  the Morse SDK's own provider (same sampling, redaction and delivery as `run()` traces). When the
+  app configured its own provider (`StrandsTelemetry()`, another backend), its exporters keep
+  receiving the spans unchanged and a copy of the Strands-scope spans is forwarded to Morse.
+- **No double counting:** while Strands invokes a model it marks itself the LLM owner, so the
+  zero-code OpenAI and Anthropic patches skip the same call (Strands' `OpenAIModel`,
+  `AnthropicModel`, LiteLLM). The Anthropic patch now honours the LLM owner too.
+- **Multi-agent spans are typed `agent`** (`morse.span_type`); the server otherwise types any span
+  with a `gen_ai.*` attribute as `llm`.
+- **Span-event attributes are redacted** in the export path, like span attributes. Strands puts
+  prompts and completions in events by default.
+- Known limits: a Strands trace is separate from an open `morse_ai.run()` trace; the server does
+  not yet label these traces with a framework or an SDK version.
+
 ### Added — zero-code google-genai tracing (MHQ-1506)
 
 - **`google-genai` joins the auto-detect map.** With `MORSE_API_KEY` + `init()`,

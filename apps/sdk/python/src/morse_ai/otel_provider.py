@@ -191,6 +191,32 @@ def _redact_attr_value(value: Any, config: RedactionConfig) -> Any:
     return value
 
 
+def _redact_events(span: Any, config: RedactionConfig) -> None:
+    """Redact span-event attribute strings (MHQ-133).
+
+    Morse's own spans carry no events, but third-party OTel emitters routed
+    through this exporter (Strands Agents) put prompt and completion text in
+    events (``gen_ai.user.message`` / ``gen_ai.choice``). Ended spans are
+    frozen, so the event list is rebuilt rather than mutated.
+    """
+    events = getattr(span, "_events", None)  # noqa: SLF001
+    if not events:
+        return
+    from opentelemetry.sdk.trace import Event  # noqa: PLC0415
+
+    span._events = tuple(  # noqa: SLF001
+        Event(
+            event.name,
+            {
+                key: _redact_attr_value(value, config)
+                for key, value in (event.attributes or {}).items()
+            },
+            event.timestamp,
+        )
+        for event in events
+    )
+
+
 class _RedactingSpanExporter(SpanExporter):
     """Delegating ``SpanExporter``: redacts span attribute string values in
     ``export()`` (called on the ``BatchSpanProcessor``'s background worker
@@ -230,6 +256,8 @@ class _RedactingSpanExporter(SpanExporter):
                     key: _redact_attr_value(value, config)
                     for key, value in attrs.items()
                 }
+            for span in spans:
+                _redact_events(span, config)
         return self._inner.export(spans)
 
     def shutdown(self) -> None:
@@ -470,6 +498,10 @@ class _OtelEngine:
         self.tracer: Any = None
         self.root_sampler: TraceIdRatioBased | None = None
         self.recorder: _RecordingSpanExporter | None = None
+        # MHQ-133: the redacting OTLP exporter, so third-party OTel spans
+        # (Strands) emitted on a customer-owned provider can be forwarded to
+        # Morse through the same redaction + delivery path.
+        self.exporter: SpanExporter | None = None
         self.max_field_bytes: int = DEFAULT_MAX_FIELD_BYTES
         self._atexit_registered = False
 
@@ -538,6 +570,7 @@ class _OtelEngine:
                 otlp_exporter, redaction_config
             )
 
+            self.exporter = exporter
             self.recorder = _RecordingSpanExporter() if capture_for_tests else None
             provider.add_span_processor(
                 BatchSpanProcessor(
@@ -573,6 +606,7 @@ class _OtelEngine:
                     _report(exc, "morse_ai.otel_provider.00")
                 self.provider = None
                 self.tracer = None
+                self.exporter = None
 
     def reset_for_testing(self) -> None:
         """Test-only fast reset: drop the provider reference WITHOUT
@@ -599,6 +633,7 @@ class _OtelEngine:
             _exporter_generation += 1
             self.provider = None
             self.tracer = None
+            self.exporter = None
             self.recorder = None
 
     def flush(self, timeout_seconds: float = 30.0) -> None:
