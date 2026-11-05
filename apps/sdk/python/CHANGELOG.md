@@ -9,7 +9,7 @@ The Python and TypeScript SDKs version **independently** — they share `0.4.0` 
 their first public release because they reached feature parity there, not
 because they are released in lockstep. Expect the numbers to diverge.
 
-## [Unreleased]
+## [0.8.0] — Unreleased (release candidate `0.8.0rc1`)
 
 ### Added — zero-code AWS Strands Agents tracing (MHQ-133)
 
