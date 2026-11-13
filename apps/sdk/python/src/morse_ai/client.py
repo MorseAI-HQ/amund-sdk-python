@@ -167,7 +167,9 @@ class _Client:
             # Retry-After honored in the installed version); a fully dead
             # endpoint fails within a bounded, real-shutdown-friendly window
             # instead of the library's full 30s ceiling.
-            timeout=10.0,
+            # Shortened 10s -> 4s (offshore QA 2026-11-12: a 0.4s script took
+            # ~17s to exit with the API unreachable).
+            timeout=4.0,
             redaction_config=self._redaction_config,
         )
         logger.debug(

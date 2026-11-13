@@ -311,6 +311,26 @@ _counters_lock = threading.Lock()
 _counters: dict[tuple[str, str], int] = defaultdict(int)
 
 
+#: Plain-language cause for the local warning, so a wrong or revoked key reads as
+#: that and not as an HTTP/OpenTelemetry internal (offshore QA 2026-11-12).
+#: Unknown reasons keep the generic text.
+_REASON_HINTS = {
+    REASON_AUTH_REJECTED: (
+        "Morse rejected your API key (wrong, revoked or expired); check MORSE_API_KEY"
+    ),
+    REASON_QUOTA_REJECTED: (
+        "Morse is rate limiting or over quota for this key; telemetry is being lost"
+    ),
+    REASON_ENDPOINT_REJECTED: (
+        "Morse rejected the request; check the endpoint URL and SDK version"
+    ),
+    REASON_RETRY_EXHAUSTED: (
+        "could not reach the Morse API after retrying; check your network and endpoint"
+    ),
+    REASON_SEND_FAILED: "could not reach the Morse API; telemetry is being lost",
+}
+
+
 def record_drop(reason: str, category: str, quantity: int = 1) -> None:
     """Count telemetry we discarded. Never raises, never sends immediately.
 
@@ -332,10 +352,11 @@ def record_drop(reason: str, category: str, quantity: int = 1) -> None:
             _LOCAL_LOG_WINDOW_SECONDS,
         ):
             logger.warning(
-                "morse_ai: dropped %d %s (%s) — telemetry is being lost",
+                "morse_ai: dropped %d %s (%s) — %s",
                 quantity,
                 category,
                 reason,
+                _REASON_HINTS.get(reason, "telemetry is being lost"),
             )
         # MHQ-1030: arm the sender so the count goes out on the normal 5s
         # cadence. Counters alone used to build nothing, so a process that lost
