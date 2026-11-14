@@ -231,6 +231,23 @@ def _ensure_sdk_initialized() -> None:
         _report(exc, "morse_ai.tracing.auto_init")
 
 
+def _note_run_if_unsendable() -> None:
+    """MHQ-1787: count a run opened with no API key, so exit can say it was not sent.
+
+    ``_ensure_initialized`` returned False for a missing key (not ``MORSE_DISABLED``,
+    which is a deliberate opt-out) and the run keeps its trace id but goes nowhere.
+    """
+    try:
+        import morse_ai  # noqa: PLC0415
+        from morse_ai._internal import diagnostics, env  # noqa: PLC0415
+
+        no_key = not env.get_api_key()
+        if morse_ai._client is None and no_key and not env.is_disabled():
+            diagnostics.record_unsent_run_no_key()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("morse_ai: unsent-run note swallowed error: %s", exc)
+
+
 def _report(exc: BaseException, fingerprint: str) -> None:
     """Route a swallowed internal error to the diagnostics channel.
 
@@ -730,6 +747,7 @@ def trace_agent(name_or_func=None):
         def wrapper(*args, **kwargs):
             # Lazy auto-init — see _ensure_sdk_initialized() for rationale.
             _ensure_sdk_initialized()
+            _note_run_if_unsendable()
             trace_id = uuid.uuid4().hex
             state = _TraceState(
                 trace_id=trace_id, agent_name=agent_name, identity_source=SOURCE_RUN
@@ -932,6 +950,7 @@ class TracedRun:
         # morse_ai.track()) never build a transport and traces silently
         # land in _last_trace instead of being POSTed.
         _ensure_sdk_initialized()
+        _note_run_if_unsendable()
         # Attempt to continue an existing distributed trace via incoming traceparent.
         # Import here to avoid circular import (propagation imports from tracing).
         trace_id: str | None = None

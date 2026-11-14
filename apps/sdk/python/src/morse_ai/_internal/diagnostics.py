@@ -732,6 +732,53 @@ def register_exit_drain() -> None:
         logger.debug("morse_ai: diagnostics exit-drain registration failed")
 
 
+# MHQ-1787 (offshore QA round 1, finding 06): with no ``MORSE_API_KEY`` and no
+# ``init()``, ``with morse_ai.run(...)`` still hands back a real-looking trace id
+# (kept on purpose, ``trace_id`` semantics are unchanged) while nothing is ever
+# sent. The one-time "SDK calls are silent no-ops" warning at first use is easy
+# to miss, so count those runs and say so loudly, once, at interpreter exit.
+# No public attribute: the count lives here and only feeds the warning.
+_unsent_no_key_runs = 0
+_unsent_lock = threading.Lock()
+_unsent_exit_registered = False
+
+
+def record_unsent_run_no_key() -> None:
+    """Count a run that cannot be sent because no API key is set. Never raises.
+
+    The first call registers the exit hook that prints the one-time warning.
+    """
+    global _unsent_no_key_runs, _unsent_exit_registered
+    try:
+        with _unsent_lock:
+            _unsent_no_key_runs += 1
+            register = not _unsent_exit_registered
+            _unsent_exit_registered = True
+        if register:
+            import atexit  # noqa: PLC0415
+
+            atexit.register(warn_unsent_runs_at_exit)
+    except Exception:  # noqa: BLE001
+        logger.debug("morse_ai: unsent-run counter failed", exc_info=True)
+
+
+def warn_unsent_runs_at_exit() -> None:
+    """Warn once that runs were not sent for lack of an API key. Never raises."""
+    global _unsent_no_key_runs
+    try:
+        with _unsent_lock:
+            count = _unsent_no_key_runs
+            _unsent_no_key_runs = 0
+        if count > 0:
+            logger.warning(
+                "morse_ai: %d run(s) not sent: no API key "
+                "(set MORSE_API_KEY or call init())",
+                count,
+            )
+    except Exception:  # noqa: BLE001
+        logger.debug("morse_ai: unsent-run warning failed", exc_info=True)
+
+
 def drain_for_shutdown() -> None:
     """Flush buffered diagnostics synchronously. Never raises. (MHQ-946)
 
@@ -776,6 +823,9 @@ def _reset_for_testing() -> None:
         _local_log_buckets.clear()
     with _counters_lock:
         _counters.clear()
+    global _unsent_no_key_runs
+    with _unsent_lock:
+        _unsent_no_key_runs = 0
     with _sender_lock:
         if _sender is not None:
             _sender.shutdown()

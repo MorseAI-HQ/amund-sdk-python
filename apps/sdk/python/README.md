@@ -2,6 +2,10 @@
 
 Unified observability for AI agents and infrastructure. One SDK.
 
+**Requires Python 3.11 or newer.** On Python 3.10 or older, `pip install morse-ai` fails with
+"No matching distribution found"; only `pip install -v morse-ai` shows the real reason
+(`requires-python >=3.11`).
+
 ## Install
 
 ```bash

@@ -11,6 +11,15 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ## [Unreleased]
 
+### Changed — no API key: a loud one-time warning at exit (MHQ-1787)
+
+- With no `MORSE_API_KEY` and no `init()`, `morse_ai.run()` and `@trace_agent` still return a
+  trace id but send nothing. The process now also logs one warning at exit, `morse_ai: N run(s) not
+sent: no API key (set MORSE_API_KEY or call init())`. No public API change; `MORSE_DISABLED=1`
+  stays silent.
+
+### Docs — Python 3.11 or newer is stated at the top of the README (MHQ-1788)
+
 ### Fixed — Strands traces report the Morse SDK version (MHQ-1740)
 
 - Spans exported through the SDK's OTel provider now carry the `morse.sdk.version` resource
