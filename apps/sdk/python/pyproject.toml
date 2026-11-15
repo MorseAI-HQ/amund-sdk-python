@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "morse-ai"
-version = "0.8.0"
+version = "0.8.1"
 description = "Unified observability for AI agents and infrastructure. One SDK."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11,<4.0"
-authors = [{ name = "Morse", email = "hello@morsehq.dev" }]
+authors = [{ name = "Morse", email = "hello@morseai.dev" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -72,8 +72,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://morsehq.dev"
-Documentation = "https://docs.morsehq.dev"
+Homepage = "https://morseai.dev"
+Documentation = "https://docs.morseai.dev"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/morse_ai"]

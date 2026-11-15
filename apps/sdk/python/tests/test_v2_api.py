@@ -150,13 +150,10 @@ def test_record_emits_v2_trace_not_runs():
 
 @pytest.mark.real_default_endpoint
 def test_default_endpoint_is_railway_prod():
-    """Phase 6c default endpoint is the Railway prod URL.
-
-    Will flip to api.morsehq.dev in Phase 6d (custom domain cutover).
-    """
+    """The default endpoint is the morseai.dev prod API."""
     morse_ai.init(api_key="av_default_endpoint_test")
     assert morse_ai._client is not None
-    assert "api.morsehq.dev" in morse_ai._client.endpoint
+    assert "api.morseai.dev" in morse_ai._client.endpoint
 
 
 def test_explicit_endpoint_overrides_default():

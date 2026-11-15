@@ -392,7 +392,7 @@ other metadata are never redacted.
 ## Docs
 
 Full reference — every adapter, all `init()` options, configuration,
-troubleshooting — lives at **[docs.morsehq.dev](https://docs.morsehq.dev)**.
+troubleshooting — lives at **[docs.morseai.dev](https://docs.morseai.dev)**.
 This README stays a quickstart.
 
 ## Naming

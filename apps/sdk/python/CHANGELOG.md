@@ -11,6 +11,13 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-11-15
+
+### Changed — default endpoint moves to morseai.dev
+
+- Default endpoint is now https://api.morseai.dev. https://api.morsehq.dev remains supported; set MORSE_ENDPOINT to keep it.
+- Docs links, project URLs and contact addresses now point at morseai.dev.
+
 ### Changed — no API key: a loud one-time warning at exit (MHQ-1787)
 
 - With no `MORSE_API_KEY` and no `init()`, `morse_ai.run()` and `@trace_agent` still return a

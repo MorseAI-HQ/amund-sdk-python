@@ -538,7 +538,7 @@ class BatchTransport:
             args = (
                 state.get("current_count", "?"),
                 state.get("limit_count", "?"),
-                state.get("upgrade_url", "https://morsehq.dev/billing"),
+                state.get("upgrade_url", "https://app.morseai.dev/settings/billing"),
                 attempts,
             )
             if first_this_period:

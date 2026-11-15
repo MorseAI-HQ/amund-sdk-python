@@ -248,10 +248,10 @@ def init(
     `endpoint` is optional — when omitted, the SDK resolves in this order:
         1. The `MORSE_ENDPOINT` env var (if set).
            Must be the FULL ingest URL including path, e.g.:
-           ``https://api.morsehq.dev/api/v1/traces/batch``
+           ``https://api.morseai.dev/api/v1/traces/batch``
            NOT just the base URL — the SDK posts directly to this value.
         2. The default prod URL:
-           ``https://api.morsehq.dev/api/v1/traces/batch``
+           ``https://api.morseai.dev/api/v1/traces/batch``
 
     `MORSE_DISABLED=1` overrides everything: init() is a no-op.
 

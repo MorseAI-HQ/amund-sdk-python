@@ -79,7 +79,7 @@ _INGEST_PATH = "/api/v1/traces/batch"
 def get_endpoint() -> str | None:
     """Return the resolved ingest URL from MORSE_ENDPOINT, or None if unset.
 
-    Accepts either a bare base URL (https://api.morsehq.dev) or the full
+    Accepts either a bare base URL (https://api.morseai.dev) or the full
     ingest URL — both resolve to the same endpoint.
     """
     value = os.environ.get("MORSE_ENDPOINT", "").strip()
