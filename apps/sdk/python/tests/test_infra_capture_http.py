@@ -201,3 +201,134 @@ async def test_async_http_5xx_marked_failed():
     span = _span_for(_get_last_trace())
     assert span["status"] == "failed"
     assert (span["metadata"] or {}).get("http.status_code") == 503
+
+
+# --- MHQ-1892: request metadata on http spans (no network: mock transports) ---
+
+
+def _only_http_span() -> dict:
+    spans = _http_spans(_get_last_trace())
+    assert len(spans) == 1
+    return spans[0]
+
+
+def _requests_session():
+    import requests
+    from requests.adapters import BaseAdapter
+
+    class _Stub(BaseAdapter):
+        def send(self, request, **kwargs):
+            resp = requests.Response()
+            resp.status_code = 200
+            resp.request = request
+            return resp
+
+        def close(self):
+            pass
+
+    session = requests.Session()
+    session.mount("http://", _Stub())
+    session.mount("https://", _Stub())
+    return session
+
+
+def test_httpx_span_records_method_path_and_timeout_without_query(monkeypatch):
+    monkeypatch.delenv("MORSE_CAPTURE_HTTP_URLS", raising=False)
+    enable_http_capture()
+    with run("agent-http-meta"):
+        client = _mock_client()
+        client.get("https://example.com/v1/items?token=secret", timeout=10)
+        client.close()
+
+    span = _only_http_span()
+    assert span["name"] == "GET example.com"
+    md = span["metadata"]
+    assert md["http.request.method"] == "GET"
+    assert md["url.path"] == "/v1/items"
+    assert md["http.request.timeout"] == 10.0
+    assert md["http.status_code"] == 200
+    assert "url.full" not in md
+    assert "secret" not in str(span)
+
+
+def test_url_full_only_when_opted_in_and_query_stripped(monkeypatch):
+    monkeypatch.setenv("MORSE_CAPTURE_HTTP_URLS", "true")
+    enable_http_capture()
+    with run("agent-http-url"):
+        client = _mock_client()
+        # pragma: allowlist nextline secret
+        url = "https://user:pw@example.com:8443/a/b?token=secret#frag"
+        client.get(url)
+        client.close()
+
+    md = _only_http_span()["metadata"]
+    assert md["url.full"] == "https://example.com:8443/a/b"
+    assert "secret" not in str(md) and "pw" not in str(md)
+
+
+def test_requests_tuple_timeout_records_read_timeout(monkeypatch):
+    monkeypatch.delenv("MORSE_CAPTURE_HTTP_URLS", raising=False)
+    enable_http_capture()
+    with run("agent-requests-meta"):
+        session = _requests_session()
+        session.get("https://example.com/p?x=1", timeout=(3, 10))
+
+    span = _only_http_span()
+    assert span["name"] == "GET example.com"
+    md = span["metadata"]
+    assert md["http.request.method"] == "GET"
+    assert md["url.path"] == "/p"
+    assert md["http.request.timeout"] == 10.0
+    assert "url.full" not in md
+
+
+def test_failed_call_keeps_request_metadata_and_exception_type():
+    import requests
+    from requests.adapters import BaseAdapter
+
+    class _Boom(BaseAdapter):
+        def send(self, request, **kwargs):
+            raise requests.exceptions.ReadTimeout("slow")
+
+        def close(self):
+            pass
+
+    enable_http_capture()
+    with run("agent-requests-fail"):
+        session = requests.Session()
+        session.mount("https://", _Boom())
+        with pytest.raises(requests.exceptions.ReadTimeout):
+            session.get("https://example.com/slow", timeout=10)
+
+    span = _only_http_span()
+    md = span["metadata"]
+    assert md["http.request.timeout"] == 10.0
+    assert md["url.path"] == "/slow"
+    assert span["exception_type"] == "requests.exceptions.ReadTimeout"
+    assert span["name"] == "GET example.com"
+
+
+def test_never_records_headers_or_bodies():
+    enable_http_capture()
+    with run("agent-http-nohdr"):
+        client = _mock_client()
+        client.post(
+            "https://example.com/x",
+            headers={"Authorization": "Bearer sk-secret"},  # pragma: allowlist secret
+            content=b"body-secret",
+        )
+        client.close()
+    assert "sk-secret" not in str(_only_http_span())
+    assert "body-secret" not in str(_only_http_span())
+
+
+def test_path_capture_can_be_turned_off(monkeypatch):
+    monkeypatch.setenv("MORSE_CAPTURE_HTTP_PATHS", "false")
+    enable_http_capture()
+    with run("agent-http-nopath"):
+        client = _mock_client()
+        client.get("https://example.com/users/42")
+        client.close()
+    md = _only_http_span()["metadata"]
+    assert "url.path" not in md
+    assert md["http.request.method"] == "GET"

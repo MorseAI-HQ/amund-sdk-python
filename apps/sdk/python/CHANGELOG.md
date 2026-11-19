@@ -11,6 +11,16 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ## [Unreleased]
 
+### Added — request details on `http` spans (MHQ-1892)
+
+- `http` spans from the httpx and requests auto-capture now carry `http.request.method`, `url.path`
+  (path only, never the query string; `MORSE_CAPTURE_HTTP_PATHS=false` turns it off) and, when the call sets one, `http.request.timeout` in seconds
+  (the read timeout for a `(connect, read)` tuple). They are set before the call, so a failed or
+  timed-out call keeps them. The failure class is still recorded as `exception.type`.
+- `url.full` (scheme, host, port and path, query string and credentials removed) is recorded only when
+  `MORSE_CAPTURE_HTTP_URLS` is truthy. Off by default. Headers and bodies are never recorded.
+- The span name stays `METHOD host`, so grouping and pricing keys do not change.
+
 ## [0.9.0] — 2026-11-19
 
 ### Added — `traceparent` on model calls so a gateway joins the trace (MHQ-1880)

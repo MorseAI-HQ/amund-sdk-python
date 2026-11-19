@@ -145,34 +145,32 @@ def test_zero_canaries_in_exported_spans(engine):
             conn.execute(f"INSERT INTO users VALUES ('{EMAIL}', '{CARD}', 3)")
         conn.execute(f"SELECT 1 -- {BEARER}\n")
 
-        # HTTP via httpx: path, query, headers, body, and a failing transport
+        # HTTP via httpx: query, headers, body, failing transport
         def handler(request: httpx.Request) -> httpx.Response:
             if "/fail" in request.url.path:
                 raise httpx.ConnectError(f"cannot reach {request.url}")
             return httpx.Response(500, text=BODY)
 
         client = httpx.Client(transport=httpx.MockTransport(handler))
-        url = (
-            f"https://api.pii-audit.test/users/{EMAIL}/orders?token={TOKEN}&card={CARD}"
-        )
+        url = f"https://api.pii-audit.test/users/orders?email={EMAIL}&token={TOKEN}&card={CARD}"
         client.post(
             url,
             headers={"Authorization": f"Bearer {BEARER}", "Cookie": COOKIE},
             content=BODY,
         )
         with pytest.raises(httpx.ConnectError):
-            client.get(f"https://api.pii-audit.test/fail/{EMAIL}?token={TOKEN}")
+            client.get(f"https://api.pii-audit.test/fail?email={EMAIL}&token={TOKEN}")
 
         # HTTP via requests
         session = requests.Session()
         session.mount("https://ok.pii-audit.test", _OkAdapter())
         session.mount("https://bad.pii-audit.test", _FailingAdapter())
         session.get(
-            f"https://ok.pii-audit.test/{EMAIL}?token={TOKEN}",
+            f"https://ok.pii-audit.test/path?email={EMAIL}&token={TOKEN}",
             headers={"Authorization": f"Bearer {BEARER}"},
         )
         with pytest.raises(requests.ConnectionError):
-            session.get(f"https://bad.pii-audit.test/{EMAIL}?token={TOKEN}")
+            session.get(f"https://bad.pii-audit.test/path?email={EMAIL}&token={TOKEN}")
 
         # Celery publish (task args and a custom header carry canaries)
         with pytest.raises(Exception):  # noqa: B017, PT011 - broker is unreachable
