@@ -612,6 +612,58 @@ def _is_http_error_status(code: int) -> bool:
     return code >= 500 or code in (408, 429)
 
 
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _timeout_seconds(value: Any) -> float | None:
+    """A request timeout as one number of seconds. A (connect, read) tuple or an
+    httpx timeout mapping yields the read timeout. Anything else gives None."""
+    if isinstance(value, dict):
+        value = value.get("read")
+    elif isinstance(value, (tuple, list)):
+        value = value[1] if len(value) > 1 else value[0]
+    elif hasattr(value, "read") and not isinstance(value, (int, float)):
+        value = getattr(value, "read", None)  # httpx.Timeout
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _record_http_request(http_span, method: Any, url: Any, timeout: Any = None) -> None:
+    """Record what was asked for on the http span, before the call is made so a
+    failed call still carries it: method, URL path (no query string), the timeout
+    and, only when ``MORSE_CAPTURE_HTTP_URLS`` is set, the full URL without query
+    string or credentials. Never headers or bodies. Best-effort."""
+    try:
+        from urllib.parse import urlparse
+
+        if isinstance(method, bytes):
+            method = method.decode("ascii", "replace")
+        if method:
+            http_span.set_metadata("http.request.method", str(method).upper())
+        parsed = urlparse(str(url or ""))
+        if parsed.path and os.environ.get(
+            "MORSE_CAPTURE_HTTP_PATHS", ""
+        ).strip().lower() not in ("0", "false", "no", "off"):
+            http_span.set_metadata("url.path", parsed.path)
+        if parsed.scheme and parsed.hostname and _env_truthy("MORSE_CAPTURE_HTTP_URLS"):
+            host = (
+                parsed.hostname
+                if ":" not in parsed.hostname
+                else f"[{parsed.hostname}]"
+            )
+            port = f":{parsed.port}" if parsed.port else ""
+            http_span.set_metadata(
+                "url.full", f"{parsed.scheme}://{host}{port}{parsed.path}"
+            )
+        seconds = _timeout_seconds(timeout)
+        if seconds is not None:
+            http_span.set_metadata("http.request.timeout", seconds)
+    except Exception:  # noqa: BLE001 — capture must never break the request
+        pass
+
+
 def _record_http_response(http_span, response) -> None:
     """Record the response status on the http span: always store
     `http.status_code` (for correlation), and mark the span failed for
@@ -646,6 +698,12 @@ def _wrap_httpx() -> bool:
         if _host_excluded(host):
             return sync_send(self, request, *args, **kwargs)
         with _http_span(_http_span_name(request.method, host)) as http_span:
+            _record_http_request(
+                http_span,
+                request.method,
+                getattr(request, "url", None),
+                (getattr(request, "extensions", None) or {}).get("timeout"),
+            )
             response = sync_send(self, request, *args, **kwargs)
             _record_http_response(http_span, response)
             return response
@@ -657,6 +715,12 @@ def _wrap_httpx() -> bool:
         if _host_excluded(host):
             return await async_send(self, request, *args, **kwargs)
         with _http_span(_http_span_name(request.method, host)) as http_span:
+            _record_http_request(
+                http_span,
+                request.method,
+                getattr(request, "url", None),
+                (getattr(request, "extensions", None) or {}).get("timeout"),
+            )
             response = await async_send(self, request, *args, **kwargs)
             _record_http_response(http_span, response)
             return response
@@ -687,6 +751,12 @@ def _wrap_requests() -> bool:
         with _http_span(
             _http_span_name(getattr(request, "method", "GET"), host)
         ) as http_span:
+            _record_http_request(
+                http_span,
+                getattr(request, "method", "GET"),
+                getattr(request, "url", None),
+                kwargs.get("timeout"),
+            )
             response = orig_send(self, request, **kwargs)
             _record_http_response(http_span, response)
             return response
