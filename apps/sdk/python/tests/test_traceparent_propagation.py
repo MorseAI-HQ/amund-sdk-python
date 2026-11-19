@@ -375,10 +375,13 @@ def test_init_opt_out_sends_no_header(engine):
 
     morse_ai.init("mhq_test", propagate_trace_context=False)  # pragma: allowlist secret
     try:
-        client = av_anthropic.wrap(_Client())
+        # init() may install the global patch, and then wrap() returns the
+        # client untouched, so assert on the fake itself.
+        fake = _Client()
+        client = av_anthropic.wrap(fake)
         with tracing.run("agent"):
             client.messages.create(model="m", messages=[])
-        assert "extra_headers" not in client.messages._av_inner.calls[0]
+        assert "extra_headers" not in fake.messages.calls[0]
     finally:
         morse_ai._reset_for_testing()
 
