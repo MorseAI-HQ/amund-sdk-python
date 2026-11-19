@@ -110,7 +110,9 @@ def _events() -> list[SimpleNamespace]:
     return [
         SimpleNamespace(
             type="message_start",
-            message=SimpleNamespace(model="claude-sonnet-5", usage=usage_start),
+            message=SimpleNamespace(
+                id="msg_stream", model="claude-sonnet-5", usage=usage_start
+            ),
         ),
         SimpleNamespace(
             type="content_block_start",
@@ -288,6 +290,8 @@ def test_wrap_sync_create_stream_rebuilds_usage_from_events(captured_traces):
     [span] = _llm_spans(captured_traces)
     _assert_full_span(span, "anthropic.messages.create")
     assert span["output_data"] == {"content": "Hello"}
+    # MHQ-1880: the id from message_start is the gateway merge key.
+    assert span["metadata"]["response_id"] == "msg_stream"
 
 
 @pytest.mark.req("MHQ-1415")

@@ -441,3 +441,16 @@ def test_wrap_no_messages_gives_null_input_data(captured_traces):
     spans = captured_traces[0]["traces"][0]["spans"]
     llm_span = next(s for s in spans if s["type"] == SpanType.LLM.value)
     assert llm_span.get("input_data") is None
+
+
+def test_wrap_records_response_id(captured_traces):
+    """MHQ-1880: the message id lets the server merge the span with a gateway's copy."""
+    client = av_anthropic.wrap(_SyncClient(_fake_response()))
+    client.messages.create(
+        model="claude-haiku-4-5",
+        max_tokens=10,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    spans = captured_traces[0]["traces"][0]["spans"]
+    [llm] = [s for s in spans if s["type"] == SpanType.LLM.value]
+    assert llm["metadata"]["response_id"] == "msg_test"

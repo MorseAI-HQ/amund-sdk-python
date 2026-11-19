@@ -370,7 +370,7 @@ def test_callbacks_tolerate_none_serialized():
 
 
 def _anthropic_lc_v3_result(
-    text: str = "hi", model: str = "claude-sonnet-4-5"
+    text: str = "hi", model: str = "claude-sonnet-4-5", response_id: str | None = None
 ) -> MockLLMResult:
     """Mimic LangChain v0.3 Anthropic LLMResult: usage on message.usage_metadata."""
 
@@ -383,6 +383,8 @@ def _anthropic_lc_v3_result(
                 "input_token_details": {"cache_read": 0},
             }
             self.response_metadata = {"model_name": model}
+            if response_id:
+                self.response_metadata["id"] = response_id
 
     class _Gen:
         def __init__(self) -> None:
@@ -420,6 +422,34 @@ def test_on_llm_end_extracts_anthropic_usage_and_cost():
     assert s["total_tokens"] == 150
     # Cost should be populated via the pricing table for a known model.
     assert s.get("cost_usd") is not None and s["cost_usd"] > 0
+
+
+def test_on_llm_end_records_provider_response_id():
+    """MHQ-1880: response_metadata["id"] is the gateway merge key."""
+    handler = MorseCallbackHandler("response-id-test")
+    run_id = uuid.uuid4()
+    result = _anthropic_lc_v3_result(response_id="msg_01abc")
+
+    with tracing.run("response-id-test"):
+        handler.on_llm_start({"id": ["ChatAnthropic"]}, ["q"], run_id=run_id)
+        handler.on_llm_end(result, run_id=run_id)
+
+    trace = tracing._get_last_trace()
+    [s] = [s for s in trace["spans"] if s.get("type") == "llm"]
+    assert s["metadata"]["response_id"] == "msg_01abc"
+
+
+def test_on_llm_end_without_response_id_adds_none():
+    handler = MorseCallbackHandler("no-response-id-test")
+    run_id = uuid.uuid4()
+
+    with tracing.run("no-response-id-test"):
+        handler.on_llm_start({"id": ["ChatAnthropic"]}, ["q"], run_id=run_id)
+        handler.on_llm_end(_anthropic_lc_v3_result(), run_id=run_id)
+
+    trace = tracing._get_last_trace()
+    [s] = [s for s in trace["spans"] if s.get("type") == "llm"]
+    assert "response_id" not in (s.get("metadata") or {})
 
 
 @pytest.mark.req("SDK-09")

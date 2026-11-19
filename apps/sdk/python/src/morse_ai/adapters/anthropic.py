@@ -824,6 +824,11 @@ def _record_llm_span_for_response(
             if span.metadata is None:
                 span.metadata = {}
             span.metadata["context_composition"] = composition
+        # MHQ-1880: the provider's message id lets the server merge this span
+        # with a gateway's record of the same call instead of counting it twice.
+        response_id = getattr(response, "id", None)
+        if isinstance(response_id, str) and response_id:
+            span.metadata = {**(span.metadata or {}), "response_id": response_id}
         if extra_metadata:
             span.metadata = {**(span.metadata or {}), **extra_metadata}
 
@@ -1142,6 +1147,7 @@ class _RawStreamAccumulator:
     """
 
     def __init__(self) -> None:
+        self.id: str | None = None
         self.model: str | None = None
         self.usage: dict[str, int] = {}
         self.stop_reason: str | None = None
@@ -1157,6 +1163,7 @@ class _RawStreamAccumulator:
         etype = getattr(event, "type", None)
         if etype == "message_start":
             message = getattr(event, "message", None)
+            self.id = getattr(message, "id", None)
             self.model = getattr(message, "model", None)
             self._merge_usage(getattr(message, "usage", None))
         elif etype == "message_delta":
@@ -1198,6 +1205,7 @@ class _RawStreamAccumulator:
                     )
                 )
         return SimpleNamespace(
+            id=self.id,
             model=self.model,
             usage=SimpleNamespace(**{f: self.usage.get(f, 0) for f in _USAGE_FIELDS}),
             content=content,

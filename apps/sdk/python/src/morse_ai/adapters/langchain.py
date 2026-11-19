@@ -241,6 +241,28 @@ def _extract_model(response: Any) -> str | None:
     return str(model) if model else None
 
 
+def _extract_response_id(response: Any) -> str | None:
+    """The provider's id for this call, from an LLMResult (MHQ-1880).
+
+    ``response_metadata["id"]`` is the provider's message id (Anthropic
+    ``msg_…``, OpenAI ``chatcmpl-…``). ``message.id`` is not used: LangChain
+    may fill it with its own run id.
+    """
+    try:
+        gens = getattr(response, "generations", None) or []
+        if gens and gens[0]:
+            msg = getattr(gens[0][0], "message", None)
+            meta = getattr(msg, "response_metadata", None) or {}
+            rid = meta.get("id")
+            if isinstance(rid, str) and rid:
+                return rid
+    except Exception:  # noqa: BLE001
+        pass
+    llm_output: dict[str, Any] = getattr(response, "llm_output", {}) or {}
+    rid = llm_output.get("id")
+    return rid if isinstance(rid, str) and rid else None
+
+
 def _documents_with_preview(documents: Any) -> list[dict[str, Any]]:
     """``build_documents`` plus the legacy 200-char ``content_preview`` key."""
     docs = build_documents(documents)
@@ -921,6 +943,15 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
             merged_md = merge_provider_reported_cost(traced._span.metadata, response)
             if merged_md is not None:
                 traced._span.metadata = merged_md
+
+            # MHQ-1880: lets the server merge this span with a gateway's record
+            # of the same call instead of counting it twice.
+            response_id = _extract_response_id(response)
+            if response_id:
+                traced._span.metadata = {
+                    **(traced._span.metadata or {}),
+                    "response_id": response_id,
+                }
 
         self._close_span(run_id, output_data={"text": output_text})
         self._maybe_close_auto_trace()
