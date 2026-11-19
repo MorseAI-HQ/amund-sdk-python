@@ -11,6 +11,8 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ## [Unreleased]
 
+## [0.9.0rc1] — 2026-11-19
+
 ### Added — `traceparent` on model calls so a gateway joins the trace (MHQ-1880)
 
 - Anthropic (`messages.create`, `create(stream=True)`, `messages.stream`, sync and async, plus
@@ -25,6 +27,13 @@ because they are released in lockstep. Expect the numbers to diverge.
 - Opt out: `MORSE_PROPAGATE_TRACE_CONTEXT=false` (or `0`), `morse_ai.init(propagate_trace_context=False)`,
   or `wrap(client, propagate_trace_context=False)`.
 - Exported span ids are now the first 64 bits of Morse's span id instead of random ones.
+
+### Fixed — the provider's response id is recorded on Anthropic and LangChain `llm` spans (MHQ-1880)
+
+- Anthropic calls (including `create(stream=True)`) and LangChain/LangGraph calls now record
+  `metadata.response_id` (`msg_…`, `chatcmpl-…`), as the OpenAI and Google Gen AI adapters already
+  did. The server uses it to merge a gateway's record of the same call when the two arrive in
+  separate traces. LangChain does not expose the id for streamed calls; `traceparent` covers those.
 
 ## [0.8.1] — 2026-11-15
 
