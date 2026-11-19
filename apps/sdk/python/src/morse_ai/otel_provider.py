@@ -43,10 +43,11 @@ no lossless mapping, and none is needed: span ids are wire-protocol-local
 identifiers, not semantic content, and the server already round-trips
 OTel's 64-bit span ids by zero-extending them into the 128-bit UUID column
 (``adapters/otlp.py::_hex_span_id_to_uuid``) — built for exactly this.
-This module lets OTel's own ``IdGenerator`` mint the (random, valid) span
-ids; it only forces the *trace* id, via the standard "synthetic remote
-parent" technique also used for W3C traceparent continuation (see
-``propagation.py``): a ``NonRecordingSpan`` carrying a ``SpanContext``
+Span ids are derived from Morse's (``_internal/span_ids.py``: first 64 bits)
+and staged into OTel's ``IdGenerator`` so a ``traceparent`` header sent mid-call
+matches the exported span (MHQ-1880). The *trace* id is forced via the
+standard "synthetic remote parent" technique also used for W3C traceparent
+continuation (see ``propagation.py``): a ``NonRecordingSpan`` carrying a ``SpanContext``
 with the desired ``trace_id`` and a pre-computed ``sampled`` flag is set
 as the parent context for ``tracer.start_span()``, so every span in the
 trace (root included) inherits the same trace id and the same sampling
@@ -73,6 +74,7 @@ from opentelemetry.sdk.trace.export import (
     SpanExporter,
     SpanExportResult,
 )
+from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
 from opentelemetry.sdk.trace.sampling import ParentBased, Sampler, TraceIdRatioBased
 from opentelemetry.trace import (
     NonRecordingSpan,
@@ -87,6 +89,7 @@ from opentelemetry.trace import (
 
 from morse_ai._internal.agent_name import env_service_name
 from morse_ai._internal.redaction import DISABLED_CONFIG, RedactionConfig
+from morse_ai._internal.span_ids import otel_span_id_for
 from morse_ai._version import __version__
 
 logger = logging.getLogger("morse_ai")
@@ -489,6 +492,28 @@ class _RecordingSpanExporter(SpanExporter):
 # ---------------------------------------------------------------------------
 
 
+class _StagedSpanIdGenerator(RandomIdGenerator):
+    """MHQ-1880: hand OTel a pre-agreed span id for the next span.
+
+    ``emit_trace_entry`` stages ``otel_span_id_for(span_id)`` right before
+    ``tracer.start_span`` (which asks for the id synchronously on the same
+    thread), so the exported id equals the one already placed in an outgoing
+    ``traceparent`` header. Unstaged callers (third-party OTel spans on this
+    provider) still get random ids.
+    """
+
+    def __init__(self) -> None:
+        self._staged = threading.local()
+
+    def stage(self, span_id_hex: str | None) -> None:
+        self._staged.value = int(span_id_hex, 16) if span_id_hex else None
+
+    def generate_span_id(self) -> int:
+        staged = getattr(self._staged, "value", None)
+        self._staged.value = None
+        return staged if staged else super().generate_span_id()
+
+
 class _OtelEngine:
     """Lazily-built TracerProvider + exporter chain. One per process."""
 
@@ -497,6 +522,7 @@ class _OtelEngine:
         self.provider: TracerProvider | None = None
         self.tracer: Any = None
         self.root_sampler: TraceIdRatioBased | None = None
+        self.id_generator = _StagedSpanIdGenerator()
         self.recorder: _RecordingSpanExporter | None = None
         # MHQ-133: the redacting OTLP exporter, so third-party OTel spans
         # (Strands) emitted on a customer-owned provider can be forwarded to
@@ -561,7 +587,9 @@ class _OtelEngine:
             if service_version:
                 resource_attrs["service.version"] = service_version
             resource = Resource.create(resource_attrs)
-            provider = TracerProvider(sampler=sampler, resource=resource)
+            provider = TracerProvider(
+                sampler=sampler, resource=resource, id_generator=self.id_generator
+            )
 
             otlp_exporter = _DropReportingOTLPSpanExporter(
                 endpoint=endpoint,
@@ -961,6 +989,9 @@ def emit_trace_entry(entry: dict[str, Any]) -> None:
         end_ns = _iso_to_ns(span_dict.get("ended_at")) or start_ns
 
         try:
+            # MHQ-1880: export the id a traceparent header already carried.
+            if span_id_hex:
+                engine.id_generator.stage(otel_span_id_for(span_id_hex))
             otel_span: Span = tracer.start_span(
                 name=span_dict.get("name") or "span",
                 context=parent_ctx,
@@ -989,6 +1020,8 @@ def emit_trace_entry(entry: dict[str, Any]) -> None:
         except Exception as exc:  # noqa: BLE001 — never break the host app
             logger.debug("morse_ai: OTel span emission swallowed error: %s", exc)
             _report(exc, "morse_ai.otel_provider.02")
+        finally:
+            engine.id_generator.stage(None)
 
 
 def _parents_first(span_dicts: list[dict], root_span_id: str | None) -> list[dict]:
