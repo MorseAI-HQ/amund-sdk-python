@@ -48,6 +48,7 @@ from morse_ai._internal.errors import absorb_errors
 from morse_ai.adapters.base import BaseAdapter, merge_provider_reported_cost
 from morse_ai.context.decomposer import decompose_openai_messages
 from morse_ai.pricing import calculate_cost
+from morse_ai.propagation import prepare_llm_call
 from morse_ai.spans import SpanData, SpanType
 from morse_ai.tracing import (
     _finalize_span,
@@ -696,6 +697,7 @@ def _record_llm_span_for_response(
     error: BaseException | None = None,
     extra_metadata: dict[str, Any] | None = None,
     azure: dict[str, Any] | None = None,
+    span_id: str | None = None,
 ) -> None:
     state = get_active_trace()
     if state is None:
@@ -725,11 +727,14 @@ def _record_llm_span_for_response(
             output_text = _extract_output_text(response)
         segments = adapter.extract_segments(kwargs or {}, response)
 
+        # MHQ-1880: a pre-minted id is the one a traceparent header already carried.
+        span_id_kw: dict[str, Any] = {"span_id": span_id} if span_id else {}
         span = SpanData(
             trace_id=state.trace_id,
             type=SpanType.LLM,
             name=name,
             parent_span_id=state.span_stack[-1].span_id if state.span_stack else None,
+            **span_id_kw,
             model=telemetry.get("model"),
             input_tokens=telemetry.get("input_tokens"),
             output_tokens=telemetry.get("output_tokens"),
@@ -944,6 +949,7 @@ class _CallState:
         self.start_mono = time.monotonic()
         self.started_at_iso = datetime.now(UTC).isoformat()
         self.done = False
+        self.span_id: str | None = None  # MHQ-1880: pre-minted, set per call
         # MHQ-1741: Azure deployment + served model; None for other clients.
         self.azure = _azure_call_slot(resource, kwargs)
 
@@ -968,6 +974,7 @@ class _CallState:
             error=error,
             extra_metadata=extra_metadata,
             azure=self.azure,
+            span_id=self.span_id,
         )
 
     def record_in_trace(self, response: Any, **kw: Any) -> None:
@@ -1008,17 +1015,29 @@ def _after_call(call_state: _CallState, response: Any) -> Any:
 
 
 def _traced_call_sync(
-    call: Any, kwargs: dict[str, Any], api: str, resource: Any = None
+    call: Any,
+    kwargs: dict[str, Any],
+    api: str,
+    resource: Any = None,
+    propagate: bool = True,
 ) -> Any:
+    """``call`` takes the request kwargs; ``extra_headers`` carries the
+    ``traceparent`` for this call's pre-minted span id (MHQ-1880)."""
     if _framework_records_call():
-        return call()
+        framework_kwargs, _ = prepare_llm_call(
+            kwargs, own_span=False, propagate=propagate
+        )
+        return call(framework_kwargs)
     call_state = _CallState(api, kwargs, resource)
 
     def _run() -> Any:
         _record_tool_spans_for_request(kwargs, api)
+        request_kwargs, call_state.span_id = prepare_llm_call(
+            kwargs, own_span=True, propagate=propagate
+        )
         try:
             with _azure_capture(call_state):
-                response = call()
+                response = call(request_kwargs)
         except BaseException as exc:
             # MHQ-1410: a failed call keeps an llm span (model, latency, error).
             call_state.record(None, error=exc)
@@ -1038,17 +1057,27 @@ def _traced_call_sync(
 
 
 async def _traced_call_async(
-    call: Any, kwargs: dict[str, Any], api: str, resource: Any = None
+    call: Any,
+    kwargs: dict[str, Any],
+    api: str,
+    resource: Any = None,
+    propagate: bool = True,
 ) -> Any:
     if _framework_records_call():
-        return await call()
+        framework_kwargs, _ = prepare_llm_call(
+            kwargs, own_span=False, propagate=propagate
+        )
+        return await call(framework_kwargs)
     call_state = _CallState(api, kwargs, resource)
 
     async def _run() -> Any:
         _record_tool_spans_for_request(kwargs, api)
+        request_kwargs, call_state.span_id = prepare_llm_call(
+            kwargs, own_span=True, propagate=propagate
+        )
         try:
             with _azure_capture(call_state):
-                response = await call()
+                response = await call(request_kwargs)
         except BaseException as exc:
             call_state.record(None, error=exc)
             raise
@@ -1323,18 +1352,20 @@ def _wrap_stream_result(response: Any, call_state: _CallState) -> Any:
 
 
 class _WrappedCompletions:
-    def __init__(self, inner: Any, api: str = _CHAT) -> None:
+    def __init__(self, inner: Any, api: str = _CHAT, propagate: bool = True) -> None:
         self._av_inner = inner
         self._av_api = api
+        self._av_propagate = propagate
 
     def create(self, *args: Any, **kwargs: Any) -> Any:
         if _install_active():
             return self._av_inner.create(*args, **kwargs)
         return _traced_call_sync(
-            lambda: self._av_inner.create(*args, **kwargs),
+            lambda kw: self._av_inner.create(*args, **kw),
             kwargs,
             self._av_api,
             self._av_inner,
+            self._av_propagate,
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -1342,18 +1373,20 @@ class _WrappedCompletions:
 
 
 class _WrappedAsyncCompletions:
-    def __init__(self, inner: Any, api: str = _CHAT) -> None:
+    def __init__(self, inner: Any, api: str = _CHAT, propagate: bool = True) -> None:
         self._av_inner = inner
         self._av_api = api
+        self._av_propagate = propagate
 
     async def create(self, *args: Any, **kwargs: Any) -> Any:
         if _install_active():
             return await self._av_inner.create(*args, **kwargs)
         return await _traced_call_async(
-            lambda: self._av_inner.create(*args, **kwargs),
+            lambda kw: self._av_inner.create(*args, **kw),
             kwargs,
             self._av_api,
             self._av_inner,
+            self._av_propagate,
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -1361,15 +1394,17 @@ class _WrappedAsyncCompletions:
 
 
 class _WrappedChat:
-    def __init__(self, inner: Any, *, is_async: bool) -> None:
+    def __init__(self, inner: Any, *, is_async: bool, propagate: bool = True) -> None:
         self._av_inner = inner
         completions = getattr(inner, "completions", None)
         if completions is None:
             self._av_completions: Any = None
         elif is_async:
-            self._av_completions = _WrappedAsyncCompletions(completions)
+            self._av_completions = _WrappedAsyncCompletions(
+                completions, propagate=propagate
+            )
         else:
-            self._av_completions = _WrappedCompletions(completions)
+            self._av_completions = _WrappedCompletions(completions, propagate=propagate)
 
     @property
     def completions(self) -> Any:
@@ -1380,18 +1415,22 @@ class _WrappedChat:
 
 
 class _WrappedClient:
-    def __init__(self, inner: Any) -> None:
+    def __init__(self, inner: Any, propagate: bool = True) -> None:
         self._av_inner = inner
         is_async = type(inner).__name__.startswith("Async")
         chat = getattr(inner, "chat", None)
-        self._av_chat: Any = _WrappedChat(chat, is_async=is_async) if chat else None
+        self._av_chat: Any = (
+            _WrappedChat(chat, is_async=is_async, propagate=propagate) if chat else None
+        )
         responses = getattr(inner, "responses", None)
         if responses is None:
             self._av_responses: Any = None
         elif is_async:
-            self._av_responses = _WrappedAsyncCompletions(responses, _RESPONSES)
+            self._av_responses = _WrappedAsyncCompletions(
+                responses, _RESPONSES, propagate
+            )
         else:
-            self._av_responses = _WrappedCompletions(responses, _RESPONSES)
+            self._av_responses = _WrappedCompletions(responses, _RESPONSES, propagate)
         setattr(self, _WRAPPED_MARKER, True)
 
     @property
@@ -1406,13 +1445,18 @@ class _WrappedClient:
         return getattr(self._av_inner, name)
 
 
-def wrap(client: ClientT) -> ClientT:
+def wrap(client: ClientT, *, propagate_trace_context: bool = True) -> ClientT:
     """Wrap an OpenAI client so every ``chat.completions.create`` and
     ``responses.create`` call emits AV spans.
 
     Returns the wrapped client. Idempotent — wrapping an already-wrapped
     client is a no-op. Context segments are captured automatically from the
     messages and tools parameters on every call.
+
+    ``propagate_trace_context`` (default True) sends a W3C ``traceparent``
+    request header naming each call's ``llm`` span so a gateway that forwards
+    it joins the trace (MHQ-1880); ``MORSE_PROPAGATE_TRACE_CONTEXT=false``
+    also turns it off.
 
     Example::
 
@@ -1437,7 +1481,7 @@ def wrap(client: ClientT) -> ClientT:
     except ImportError:
         pass
     try:
-        return _WrappedClient(client)  # type: ignore[return-value]
+        return _WrappedClient(client, propagate_trace_context)  # type: ignore[return-value]
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "morse_ai: failed to wrap OpenAI client (%s) — calls untraced", exc
@@ -1453,7 +1497,7 @@ def wrap(client: ClientT) -> ClientT:
 def _wrap_create(original: Any, api: str = _CHAT) -> Any:
     def traced_create(self: Any, *args: Any, **kwargs: Any) -> Any:
         return _traced_call_sync(
-            lambda: original(self, *args, **kwargs), kwargs, api, self
+            lambda kw: original(self, *args, **kw), kwargs, api, self
         )
 
     traced_create.__wrapped__ = original  # type: ignore[attr-defined]
@@ -1463,7 +1507,7 @@ def _wrap_create(original: Any, api: str = _CHAT) -> Any:
 def _wrap_acreate(original: Any, api: str = _CHAT) -> Any:
     async def traced_acreate(self: Any, *args: Any, **kwargs: Any) -> Any:
         return await _traced_call_async(
-            lambda: original(self, *args, **kwargs), kwargs, api, self
+            lambda kw: original(self, *args, **kw), kwargs, api, self
         )
 
     traced_acreate.__wrapped__ = original  # type: ignore[attr-defined]

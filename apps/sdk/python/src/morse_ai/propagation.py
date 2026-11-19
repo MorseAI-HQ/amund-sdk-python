@@ -18,10 +18,15 @@ References:
 from __future__ import annotations
 
 import logging
+import os
+import uuid
+from typing import Any
 
 from opentelemetry.trace import get_current_span
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
+from morse_ai._internal.span_ids import otel_span_id_for
+from morse_ai.spans import SpanType
 from morse_ai.tracing import get_active_trace
 
 logger = logging.getLogger("morse_ai")
@@ -35,6 +40,7 @@ _TRACE_ID_LEN = 32  # 128-bit as hex
 _SPAN_ID_LEN = 16  # 64-bit as hex
 
 _propagator = TraceContextTextMapPropagator()
+_init_propagate: bool | None = None
 
 
 def _resolve_sampled_flag(trace_id_hex: str) -> str:
@@ -53,12 +59,21 @@ def _resolve_sampled_flag(trace_id_hex: str) -> str:
     return W3C_FLAGS_SAMPLED if sampled else W3C_FLAGS_NOT_SAMPLED
 
 
+def _build_traceparent(state, raw_span_id: str) -> str:
+    trace_id = state.trace_id  # 32-char uuid4 hex
+    span_id = otel_span_id_for(raw_span_id)
+    flags = _resolve_sampled_flag(trace_id)
+    return f"{W3C_VERSION}-{trace_id}-{span_id}-{flags}"
+
+
 def inject_traceparent(headers: dict) -> dict:
     """Add W3C traceparent header from the current trace context.
 
     Format: 00-{trace_id}-{span_id}-{flags}
     - trace_id: 32 hex chars — taken from the active trace's trace_id (uuid4 hex)
-    - span_id:  16 hex chars — first 16 chars of the current span's span_id
+    - span_id:  16 hex chars — the OTel span id of the current span
+      (``otel_span_id_for(span.span_id)``), the SAME id the OTLP export gives
+      that span, so a receiver can parent its own span to it (MHQ-1880)
     - flags:    reflects the real per-trace sampling decision (MHQ-668)
 
     Mutates and returns the headers dict for convenience.
@@ -68,26 +83,82 @@ def inject_traceparent(headers: dict) -> dict:
     if state is None:
         return headers
 
-    trace_id = state.trace_id  # 32-char uuid4 hex
-
-    # Use the top span on the stack (current span) for the W3C span_id.
-    # W3C span_id is 16 hex chars; our span_ids are 32-char uuid4 hex,
-    # so we take the first 16 chars. (Real OTel span ids for this trace
-    # don't exist yet at injection time — they're minted when the trace
-    # closes and its spans are converted/exported; see otel_provider.py.)
+    # The top span on the stack is the current span.
     if state.span_stack:
         raw_span_id = state.span_stack[-1].span_id
     elif state.completed_spans:
         raw_span_id = state.completed_spans[-1].span_id
     else:
-        # No spans yet — use first 16 chars of trace_id as a fallback
-        raw_span_id = trace_id
+        # No spans yet — use the trace_id as the (hashed-to-16-hex) fallback
+        raw_span_id = state.trace_id
 
-    span_id = raw_span_id[:_SPAN_ID_LEN]
-    flags = _resolve_sampled_flag(trace_id)
-
-    headers[W3C_TRACEPARENT_HEADER] = f"{W3C_VERSION}-{trace_id}-{span_id}-{flags}"
+    headers[W3C_TRACEPARENT_HEADER] = _build_traceparent(state, raw_span_id)
     return headers
+
+
+def propagation_enabled() -> bool:
+    """False when ``MORSE_PROPAGATE_TRACE_CONTEXT`` is ``false``/``0`` (case
+    insensitive) or ``init(propagate_trace_context=False)`` was called."""
+    raw = os.environ.get("MORSE_PROPAGATE_TRACE_CONTEXT", "").strip().lower()
+    if raw in ("false", "0", "no", "off"):
+        return False
+    return _init_propagate is not False
+
+
+def set_propagate_default(value: bool | None) -> None:
+    """``init(propagate_trace_context=...)`` hook; ``None`` leaves env decide."""
+    global _init_propagate  # noqa: PLW0603
+    _init_propagate = value
+
+
+def _has_traceparent(headers: Any) -> bool:
+    try:
+        return any(str(k).lower() == W3C_TRACEPARENT_HEADER for k in headers)
+    except TypeError:
+        return False
+
+
+def prepare_llm_call(
+    kwargs: dict[str, Any], *, own_span: bool, propagate: bool = True
+) -> tuple[dict[str, Any], str | None]:
+    """Add a ``traceparent`` to a model-client call's ``extra_headers``.
+
+    ``own_span=True``: the SDK will record this call's ``llm`` span after the
+    response, so mint its span id now. The header points at it and the id is
+    returned so the caller builds the ``SpanData`` with it.
+    ``own_span=False``: a framework already owns an open ``llm`` span; the
+    header points at it (top of the span stack) and no id is returned. If the
+    top span is not an ``llm`` span (e.g. Strands traces on its own provider)
+    no header is added.
+
+    Returns ``(request_kwargs, minted_span_id)``. The caller's kwargs and
+    headers are never mutated; a header the caller set is never overwritten.
+    Never raises: any failure returns the inputs unchanged.
+    """
+    try:
+        if not propagate or not propagation_enabled():
+            return kwargs, None
+        state = get_active_trace()
+        if state is None:
+            return kwargs, None
+        existing = kwargs.get("extra_headers")
+        if existing is not None and not hasattr(existing, "items"):
+            return kwargs, None
+        if existing and _has_traceparent(existing):
+            return kwargs, None
+        if own_span:
+            span_id = uuid.uuid4().hex
+        else:
+            top = state.span_stack[-1] if state.span_stack else None
+            if top is None or top.type != SpanType.LLM:
+                return kwargs, None
+            span_id = top.span_id
+        headers = dict(existing or {})
+        headers[W3C_TRACEPARENT_HEADER] = _build_traceparent(state, span_id)
+        return {**kwargs, "extra_headers": headers}, (span_id if own_span else None)
+    except Exception as exc:  # noqa: BLE001 — never break the customer's call
+        logger.debug("morse_ai: traceparent injection swallowed error: %s", exc)
+        return kwargs, None
 
 
 def extract_traceparent(headers: dict) -> tuple[str, str] | None:

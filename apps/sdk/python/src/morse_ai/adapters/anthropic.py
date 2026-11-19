@@ -63,6 +63,7 @@ from morse_ai._internal.errors import absorb_errors
 from morse_ai.adapters.base import BaseAdapter
 from morse_ai.context.decomposer import compute_composition
 from morse_ai.pricing import calculate_cost
+from morse_ai.propagation import prepare_llm_call
 from morse_ai.spans import SpanData, SpanType
 from morse_ai.tracing import (
     _finalize_span,
@@ -92,6 +93,8 @@ _original_create = None
 _original_acreate = None
 _original_stream = None
 _original_astream = None
+_original_beta_create = None
+_original_beta_acreate = None
 
 # Per-segment content cap (bytes). Anything beyond is truncated and
 # `content_truncated=True` is set so the server still has the prefix for
@@ -760,6 +763,7 @@ def _record_llm_span_for_response(
     error_message: str | None = None,
     extra_metadata: dict[str, Any] | None = None,
     error: BaseException | None = None,
+    span_id: str | None = None,
 ) -> None:
     """Build an `llm` span from the response and append it to the active trace.
 
@@ -803,11 +807,14 @@ def _record_llm_span_for_response(
         )
 
         output_text = _extract_output_text(response)
+        # MHQ-1880: a pre-minted id is the one a traceparent header already carried.
+        span_id_kw: dict[str, Any] = {"span_id": span_id} if span_id else {}
         span = SpanData(
             trace_id=state.trace_id,
             type=SpanType.LLM,
             name=name,
             parent_span_id=state.span_stack[-1].span_id if state.span_stack else None,
+            **span_id_kw,
             model=telemetry.get("model"),
             input_tokens=telemetry.get("input_tokens"),
             output_tokens=telemetry.get("output_tokens"),
@@ -895,6 +902,7 @@ def _record_failed_call(
     started_at_iso: str,
     error: BaseException,
     summarize_override: bool,
+    span_id: str | None = None,
 ) -> None:
     """MHQ-1415: a call that raised still gets a failed ``llm`` span with the
     requested model and its latency, and no usage (so it is never priced)."""
@@ -911,25 +919,42 @@ def _record_failed_call(
             status="failed",
             error_message=f"{type(error).__name__}: {error}",
             error=error,
+            span_id=span_id,
         )
     except Exception as exc:  # noqa: BLE001 — never mask the caller's error
         logger.debug("morse_ai: anthropic failed-call span swallowed: %s", exc)
 
 
 def _traced_call_sync(
-    call: Any, kwargs: dict[str, Any], *, summarize_override: bool
+    call: Any,
+    kwargs: dict[str, Any],
+    *,
+    summarize_override: bool,
+    propagate: bool = True,
 ) -> Any:
-    """Run one non-streaming ``messages.create`` and record its ``llm`` span."""
+    """Run one non-streaming ``messages.create`` and record its ``llm`` span.
+
+    ``call`` takes the request kwargs (``extra_headers`` carries the
+    ``traceparent`` for this call's pre-minted span id, MHQ-1880)."""
     name = "anthropic.messages.create"
     start_mono = time.monotonic()
     started_at_iso = datetime.now(UTC).isoformat()
 
     def _run() -> Any:
+        request_kwargs, span_id = prepare_llm_call(
+            kwargs, own_span=True, propagate=propagate
+        )
         try:
-            response = call()
+            response = call(request_kwargs)
         except BaseException as exc:
             _record_failed_call(
-                name, kwargs, start_mono, started_at_iso, exc, summarize_override
+                name,
+                kwargs,
+                start_mono,
+                started_at_iso,
+                exc,
+                summarize_override,
+                span_id,
             )
             raise
         _record_llm_span_for_response(
@@ -939,6 +964,7 @@ def _traced_call_sync(
             kwargs,
             summarize_override=summarize_override,
             started_at_iso=started_at_iso,
+            span_id=span_id,
         )
         return response
 
@@ -955,7 +981,11 @@ def _traced_call_sync(
 
 
 async def _traced_call_async(
-    call: Any, kwargs: dict[str, Any], *, summarize_override: bool
+    call: Any,
+    kwargs: dict[str, Any],
+    *,
+    summarize_override: bool,
+    propagate: bool = True,
 ) -> Any:
     """Async counterpart of ``_traced_call_sync``."""
     name = "anthropic.messages.create"
@@ -963,11 +993,20 @@ async def _traced_call_async(
     started_at_iso = datetime.now(UTC).isoformat()
 
     async def _run() -> Any:
+        request_kwargs, span_id = prepare_llm_call(
+            kwargs, own_span=True, propagate=propagate
+        )
         try:
-            response = await call()
+            response = await call(request_kwargs)
         except BaseException as exc:
             _record_failed_call(
-                name, kwargs, start_mono, started_at_iso, exc, summarize_override
+                name,
+                kwargs,
+                start_mono,
+                started_at_iso,
+                exc,
+                summarize_override,
+                span_id,
             )
             raise
         _record_llm_span_for_response(
@@ -977,6 +1016,7 @@ async def _traced_call_async(
             kwargs,
             summarize_override=summarize_override,
             started_at_iso=started_at_iso,
+            span_id=span_id,
         )
         return response
 
@@ -999,6 +1039,7 @@ def _record_stream_span(
     started_at_iso: str,
     summarize_override: bool,
     error: BaseException | None,
+    span_id: str | None = None,
 ) -> None:
     """Record the llm span for one finished (or abandoned / failed) stream."""
     complete = message is not None and getattr(message, "stop_reason", None) is not None
@@ -1020,6 +1061,7 @@ def _record_stream_span(
             if error is not None
             else None,
             extra_metadata=extra,
+            span_id=span_id,
         )
 
     set_active_framework(_FRAMEWORK_NAME)
@@ -1042,8 +1084,13 @@ class _StreamSpanState:
     """Call-time bookkeeping shared by every stream wrapper; records once."""
 
     def __init__(
-        self, name: str, kwargs: dict[str, Any], summarize_override: bool
+        self,
+        name: str,
+        kwargs: dict[str, Any],
+        summarize_override: bool,
+        span_id: str | None = None,
     ) -> None:
+        self.span_id = span_id
         self.name = name
         self.kwargs = kwargs
         self.summarize_override = summarize_override
@@ -1068,6 +1115,7 @@ class _StreamSpanState:
             started_at_iso=self.started_at_iso,
             summarize_override=self.summarize_override,
             error=error,
+            span_id=self.span_id,
         )
 
 
@@ -1083,11 +1131,16 @@ class _TracedMessageStreamManager:
     """Wraps ``MessageStreamManager`` (what ``messages.stream()`` returns)."""
 
     def __init__(
-        self, inner: Any, kwargs: dict[str, Any], *, summarize_override: bool
+        self,
+        inner: Any,
+        kwargs: dict[str, Any],
+        *,
+        summarize_override: bool,
+        span_id: str | None = None,
     ) -> None:
         self._av_inner = inner
         self._av_state = _StreamSpanState(
-            "anthropic.messages.stream", kwargs, summarize_override
+            "anthropic.messages.stream", kwargs, summarize_override, span_id
         )
         self._av_stream: Any = None
 
@@ -1113,11 +1166,16 @@ class _TracedAsyncMessageStreamManager:
     """Wraps ``AsyncMessageStreamManager`` (async ``messages.stream()``)."""
 
     def __init__(
-        self, inner: Any, kwargs: dict[str, Any], *, summarize_override: bool
+        self,
+        inner: Any,
+        kwargs: dict[str, Any],
+        *,
+        summarize_override: bool,
+        span_id: str | None = None,
     ) -> None:
         self._av_inner = inner
         self._av_state = _StreamSpanState(
-            "anthropic.messages.stream", kwargs, summarize_override
+            "anthropic.messages.stream", kwargs, summarize_override, span_id
         )
         self._av_stream: Any = None
 
@@ -1217,12 +1275,17 @@ class _TracedRawStream:
     """Wraps the sync ``Stream`` returned by ``messages.create(stream=True)``."""
 
     def __init__(
-        self, inner: Any, kwargs: dict[str, Any], *, summarize_override: bool
+        self,
+        inner: Any,
+        kwargs: dict[str, Any],
+        *,
+        summarize_override: bool,
+        span_id: str | None = None,
     ) -> None:
         self._av_inner = inner
         self._av_acc = _RawStreamAccumulator()
         self._av_state = _StreamSpanState(
-            "anthropic.messages.create", kwargs, summarize_override
+            "anthropic.messages.create", kwargs, summarize_override, span_id
         )
 
     def __iter__(self) -> Any:
@@ -1259,12 +1322,17 @@ class _TracedAsyncRawStream:
     """Wraps the ``AsyncStream`` from async ``messages.create(stream=True)``."""
 
     def __init__(
-        self, inner: Any, kwargs: dict[str, Any], *, summarize_override: bool
+        self,
+        inner: Any,
+        kwargs: dict[str, Any],
+        *,
+        summarize_override: bool,
+        span_id: str | None = None,
     ) -> None:
         self._av_inner = inner
         self._av_acc = _RawStreamAccumulator()
         self._av_state = _StreamSpanState(
-            "anthropic.messages.create", kwargs, summarize_override
+            "anthropic.messages.create", kwargs, summarize_override, span_id
         )
 
     async def __aiter__(self) -> Any:
@@ -1310,12 +1378,15 @@ class _WrappedMessages:
     (``messages.stream``, ``messages.batches``, etc.) keep working unchanged.
     """
 
-    def __init__(self, inner: Any, *, summarize_default: bool) -> None:
+    def __init__(
+        self, inner: Any, *, summarize_default: bool, propagate: bool = True
+    ) -> None:
         # ``_av_inner`` and ``_av_summarize_default`` use the ``_av_`` prefix
         # to avoid colliding with any attribute the upstream Anthropic SDK
         # may add in future versions.
         self._av_inner = inner
         self._av_summarize_default = summarize_default
+        self._av_propagate = propagate
 
     def create(self, *args: Any, **kwargs: Any) -> Any:
         """Sync wrapper around ``messages.create`` — emits an ``llm`` span.
@@ -1328,29 +1399,50 @@ class _WrappedMessages:
         wrap-time) because customer code may call ``wrap()`` before any
         SDK code runs.
         """
-        if _install_active() or _inside_framework_llm_span():
-            # The global patch (or the enclosing framework span) records it.
+        if _install_active():
+            # The global patch records it (and injects the traceparent).
             return self._av_inner.create(*args, **kwargs)
+        if _inside_framework_llm_span():
+            # The enclosing framework span records it; MHQ-1880: point the
+            # traceparent at that span.
+            kw, _ = prepare_llm_call(
+                kwargs, own_span=False, propagate=self._av_propagate
+            )
+            return self._av_inner.create(*args, **kw)
         if kwargs.get("stream"):
+            kw, span_id = prepare_llm_call(
+                kwargs, own_span=True, propagate=self._av_propagate
+            )
             return _TracedRawStream(
-                self._av_inner.create(*args, **kwargs),
+                self._av_inner.create(*args, **kw),
                 kwargs,
                 summarize_override=self._av_summarize_default,
+                span_id=span_id,
             )
         return _traced_call_sync(
-            lambda: self._av_inner.create(*args, **kwargs),
+            lambda kw: self._av_inner.create(*args, **kw),
             kwargs,
             summarize_override=self._av_summarize_default,
+            propagate=self._av_propagate,
         )
 
     def stream(self, *args: Any, **kwargs: Any) -> Any:
         """``messages.stream``: one ``llm`` span when the block ends (MHQ-1415)."""
-        if _install_active() or _inside_framework_llm_span():
+        if _install_active():
             return self._av_inner.stream(*args, **kwargs)
+        if _inside_framework_llm_span():
+            kw, _ = prepare_llm_call(
+                kwargs, own_span=False, propagate=self._av_propagate
+            )
+            return self._av_inner.stream(*args, **kw)
+        kw, span_id = prepare_llm_call(
+            kwargs, own_span=True, propagate=self._av_propagate
+        )
         return _TracedMessageStreamManager(
-            self._av_inner.stream(*args, **kwargs),
+            self._av_inner.stream(*args, **kw),
             kwargs,
             summarize_override=self._av_summarize_default,
+            span_id=span_id,
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -1364,33 +1456,55 @@ class _WrappedMessages:
 class _WrappedAsyncMessages:
     """Async counterpart of ``_WrappedMessages`` for ``AsyncAnthropic`` clients."""
 
-    def __init__(self, inner: Any, *, summarize_default: bool) -> None:
+    def __init__(
+        self, inner: Any, *, summarize_default: bool, propagate: bool = True
+    ) -> None:
         self._av_inner = inner
         self._av_summarize_default = summarize_default
+        self._av_propagate = propagate
 
     async def create(self, *args: Any, **kwargs: Any) -> Any:
-        if _install_active() or _inside_framework_llm_span():
+        if _install_active():
             return await self._av_inner.create(*args, **kwargs)
+        if _inside_framework_llm_span():
+            kw, _ = prepare_llm_call(
+                kwargs, own_span=False, propagate=self._av_propagate
+            )
+            return await self._av_inner.create(*args, **kw)
         if kwargs.get("stream"):
+            kw, span_id = prepare_llm_call(
+                kwargs, own_span=True, propagate=self._av_propagate
+            )
             return _TracedAsyncRawStream(
-                await self._av_inner.create(*args, **kwargs),
+                await self._av_inner.create(*args, **kw),
                 kwargs,
                 summarize_override=self._av_summarize_default,
+                span_id=span_id,
             )
         return await _traced_call_async(
-            lambda: self._av_inner.create(*args, **kwargs),
+            lambda kw: self._av_inner.create(*args, **kw),
             kwargs,
             summarize_override=self._av_summarize_default,
+            propagate=self._av_propagate,
         )
 
     def stream(self, *args: Any, **kwargs: Any) -> Any:
         """Async ``messages.stream`` — returns a manager used with ``async with``."""
-        if _install_active() or _inside_framework_llm_span():
+        if _install_active():
             return self._av_inner.stream(*args, **kwargs)
+        if _inside_framework_llm_span():
+            kw, _ = prepare_llm_call(
+                kwargs, own_span=False, propagate=self._av_propagate
+            )
+            return self._av_inner.stream(*args, **kw)
+        kw, span_id = prepare_llm_call(
+            kwargs, own_span=True, propagate=self._av_propagate
+        )
         return _TracedAsyncMessageStreamManager(
-            self._av_inner.stream(*args, **kwargs),
+            self._av_inner.stream(*args, **kw),
             kwargs,
             summarize_override=self._av_summarize_default,
+            span_id=span_id,
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -1410,7 +1524,7 @@ class _WrappedClient:
     against any structural client that exposes ``.messages.create``.
     """
 
-    def __init__(self, inner: Any, *, summarize: bool) -> None:
+    def __init__(self, inner: Any, *, summarize: bool, propagate: bool = True) -> None:
         self._av_inner = inner
         self._av_summarize_default = summarize
         # Detect async vs sync. AsyncAnthropic.messages.create is a coroutine
@@ -1425,11 +1539,11 @@ class _WrappedClient:
             self._av_messages: Any = None
         elif is_async:
             self._av_messages = _WrappedAsyncMessages(
-                inner_messages, summarize_default=summarize
+                inner_messages, summarize_default=summarize, propagate=propagate
             )
         else:
             self._av_messages = _WrappedMessages(
-                inner_messages, summarize_default=summarize
+                inner_messages, summarize_default=summarize, propagate=propagate
             )
         # Idempotency marker — wrap()-ing an already-wrapped client should
         # be a no-op; we check this attribute in ``wrap()`` itself.
@@ -1472,6 +1586,7 @@ def wrap(
     client: ClientT,
     *,
     summarize: bool = False,
+    propagate_trace_context: bool = True,
 ) -> ClientT:
     """Wrap an Anthropic client so every ``messages.create`` call emits AV spans.
 
@@ -1489,6 +1604,10 @@ def wrap(
             ``memory`` span (``metadata.memory_op_type="consolidate"``) per
             MEM-11. The per-call ``summarize()`` context manager remains
             available as an override that wins when active.
+        propagate_trace_context: When ``True`` (default), each call carries a
+            W3C ``traceparent`` request header naming this call's ``llm`` span,
+            so a gateway that forwards it joins the same trace (MHQ-1880).
+            ``MORSE_PROPAGATE_TRACE_CONTEXT=false`` also turns it off.
 
     Returns:
         The wrapped client. The return type is the same as the input client
@@ -1537,7 +1656,9 @@ def wrap(
         # ``_WrappedClient`` is intentionally untyped against ``ClientT``
         # because its public surface is the *same* as the inner client (via
         # __getattr__). The cast keeps static type-checkers happy.
-        return _WrappedClient(client, summarize=summarize)  # type: ignore[return-value]
+        return _WrappedClient(  # type: ignore[return-value]
+            client, summarize=summarize, propagate=propagate_trace_context
+        )
     except Exception as exc:  # noqa: BLE001 — never break the customer's setup
         logger.warning(
             "morse_ai: failed to wrap Anthropic client (%s) — calls untraced",
@@ -1556,13 +1677,20 @@ def _wrap_create(original):
 
     def traced_create(self, *args, **kwargs):
         if _inside_framework_llm_span():
-            return original(self, *args, **kwargs)
+            # MHQ-1880: with_raw_response binds this patched method, so a
+            # LangChain call lands here; point the traceparent at its llm span.
+            kw, _ = prepare_llm_call(kwargs, own_span=False)
+            return original(self, *args, **kw)
         if kwargs.get("stream"):
+            kw, span_id = prepare_llm_call(kwargs, own_span=True)
             return _TracedRawStream(
-                original(self, *args, **kwargs), kwargs, summarize_override=False
+                original(self, *args, **kw),
+                kwargs,
+                summarize_override=False,
+                span_id=span_id,
             )
         return _traced_call_sync(
-            lambda: original(self, *args, **kwargs), kwargs, summarize_override=False
+            lambda kw: original(self, *args, **kw), kwargs, summarize_override=False
         )
 
     traced_create.__wrapped__ = original  # standard convention so customers can unwrap
@@ -1574,9 +1702,14 @@ def _wrap_stream(original, manager_cls):
 
     def traced_stream(self, *args, **kwargs):
         if _inside_framework_llm_span():
-            return original(self, *args, **kwargs)
+            kw, _ = prepare_llm_call(kwargs, own_span=False)
+            return original(self, *args, **kw)
+        kw, span_id = prepare_llm_call(kwargs, own_span=True)
         return manager_cls(
-            original(self, *args, **kwargs), kwargs, summarize_override=False
+            original(self, *args, **kw),
+            kwargs,
+            summarize_override=False,
+            span_id=span_id,
         )
 
     traced_stream.__wrapped__ = original
@@ -1588,13 +1721,18 @@ def _wrap_acreate(original):
 
     async def traced_acreate(self, *args, **kwargs):
         if _inside_framework_llm_span():
-            return await original(self, *args, **kwargs)
+            kw, _ = prepare_llm_call(kwargs, own_span=False)
+            return await original(self, *args, **kw)
         if kwargs.get("stream"):
+            kw, span_id = prepare_llm_call(kwargs, own_span=True)
             return _TracedAsyncRawStream(
-                await original(self, *args, **kwargs), kwargs, summarize_override=False
+                await original(self, *args, **kw),
+                kwargs,
+                summarize_override=False,
+                span_id=span_id,
             )
         return await _traced_call_async(
-            lambda: original(self, *args, **kwargs), kwargs, summarize_override=False
+            lambda kw: original(self, *args, **kw), kwargs, summarize_override=False
         )
 
     traced_acreate.__wrapped__ = original
@@ -1628,6 +1766,7 @@ def install() -> bool:
     or already), False if Anthropic isn't available or installation failed.
     """
     global _original_create, _original_acreate, _original_stream, _original_astream
+    global _original_beta_create, _original_beta_acreate
 
     try:
         import anthropic  # type: ignore[import-not-found]
@@ -1681,6 +1820,27 @@ def install() -> bool:
             "morse_ai: Anthropic adapter could not patch messages.stream: %s", exc
         )
 
+    # MHQ-1880: ``client.beta.messages.create`` (LangChain uses it when
+    # ``betas`` is set) is a separate class; patch it the same way so those
+    # calls are traced and carry the traceparent.
+    try:
+        from anthropic.resources.beta.messages import (  # type: ignore[import-not-found]
+            AsyncMessages as BetaAsyncMessages,
+        )
+        from anthropic.resources.beta.messages import (  # type: ignore[import-not-found]
+            Messages as BetaMessages,
+        )
+
+        _original_beta_create = BetaMessages.create
+        BetaMessages.create = _wrap_create(_original_beta_create)  # type: ignore[method-assign]
+        _original_beta_acreate = BetaAsyncMessages.create
+        BetaAsyncMessages.create = _wrap_acreate(_original_beta_acreate)  # type: ignore[method-assign]
+    except (ImportError, AttributeError) as exc:
+        logger.debug(
+            "morse_ai: Anthropic adapter could not patch beta.messages.create: %s",
+            exc,
+        )
+
     setattr(anthropic, _INSTALL_FLAG, True)
     logger.info("morse_ai: Anthropic adapter installed")
     return True
@@ -1690,6 +1850,7 @@ def install() -> bool:
 def uninstall() -> None:
     """Restore the original Anthropic methods. Idempotent."""
     global _original_create, _original_acreate, _original_stream, _original_astream
+    global _original_beta_create, _original_beta_acreate
 
     try:
         import anthropic  # type: ignore[import-not-found]
@@ -1736,5 +1897,23 @@ def uninstall() -> None:
             pass
         _original_stream = None
         _original_astream = None
+
+    if _original_beta_create is not None or _original_beta_acreate is not None:
+        try:
+            from anthropic.resources.beta.messages import (  # type: ignore[import-not-found]
+                AsyncMessages as BetaAsyncMessages,
+            )
+            from anthropic.resources.beta.messages import (  # type: ignore[import-not-found]
+                Messages as BetaMessages,
+            )
+
+            if _original_beta_create is not None:
+                BetaMessages.create = _original_beta_create  # type: ignore[method-assign]
+            if _original_beta_acreate is not None:
+                BetaAsyncMessages.create = _original_beta_acreate  # type: ignore[method-assign]
+        except (ImportError, AttributeError):
+            pass
+        _original_beta_create = None
+        _original_beta_acreate = None
 
     setattr(anthropic, _INSTALL_FLAG, False)

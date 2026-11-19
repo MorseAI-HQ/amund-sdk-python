@@ -239,6 +239,7 @@ def init(
     source: str | None = None,
     agent_version: str | None = None,
     capture_end_user: bool = False,
+    propagate_trace_context: bool = True,
 ) -> None:
     """Initialize the Morse SDK singleton.
 
@@ -297,7 +298,15 @@ def init(
             call and set the trace ``user_id`` to ``"h:" + sha256(value)[:32]``
             (the raw value is never sent). A ``user_id`` your app already set
             (``run(user_id=)``) always wins. ``customer_id`` is never set.
+        propagate_trace_context: Default True. The Anthropic and OpenAI
+            adapters add a W3C ``traceparent`` request header (naming the
+            call's ``llm`` span) to model calls made inside a trace, so a
+            gateway that forwards it (LiteLLM) joins the same trace. Set False,
+            or ``MORSE_PROPAGATE_TRACE_CONTEXT=false``, to send nothing.
     """
+    from morse_ai.propagation import set_propagate_default  # noqa: PLC0415
+
+    set_propagate_default(propagate_trace_context)
     # Resolve api_key: explicit arg wins, then env var, then error.
     resolved_key = api_key or env.get_api_key()
     if not resolved_key:
@@ -771,6 +780,9 @@ def _reset_for_testing() -> None:
     global _client, _no_api_key_warning_emitted, _last_logged_endpoint
     global _prompt_link_logged
     _prompt_link_logged = False
+    from morse_ai.propagation import set_propagate_default  # noqa: PLC0415
+
+    set_propagate_default(None)
     if _client is not None:
         _client._reset_for_testing()  # noqa: SLF001 — test-only fast teardown
         _client = None

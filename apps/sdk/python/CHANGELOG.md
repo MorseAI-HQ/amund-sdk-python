@@ -11,6 +11,21 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ## [Unreleased]
 
+### Added — `traceparent` on model calls so a gateway joins the trace (MHQ-1880)
+
+- Anthropic (`messages.create`, `create(stream=True)`, `messages.stream`, sync and async, plus
+  `beta.messages.create` under the zero-code patch) and OpenAI (`chat.completions.create`,
+  `responses.create`, sync, async, stream) calls made inside an active trace now send one extra
+  HTTP request header: `traceparent: 00-<trace id, 32 hex>-<span id, 16 hex>-<01|00>`. The span id
+  is the call's `llm` span, and the exported OTLP span now uses that same id, so a gateway
+  (LiteLLM) that forwards the header produces a span that is a child of it and the server merges the
+  two records of one call. Inside a LangChain/LangGraph `llm` span the header names that span.
+- Nothing else is sent. No header goes out with no active trace, and a `traceparent` you set in
+  `extra_headers` is never replaced (your dict is copied, not changed).
+- Opt out: `MORSE_PROPAGATE_TRACE_CONTEXT=false` (or `0`), `morse_ai.init(propagate_trace_context=False)`,
+  or `wrap(client, propagate_trace_context=False)`.
+- Exported span ids are now the first 64 bits of Morse's span id instead of random ones.
+
 ## [0.8.1] — 2026-11-15
 
 ### Changed — default endpoint moves to morseai.dev
