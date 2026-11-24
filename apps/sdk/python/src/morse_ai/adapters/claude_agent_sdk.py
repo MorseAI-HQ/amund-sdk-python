@@ -804,8 +804,9 @@ def _apply_result_message(traced_run: TracedRun, msg: Any) -> None:
 
     Only called for a trace this adapter opened. MHQ-1914: ``is_error`` is the CLI's
     exit status, not whether the task worked, so it is never written as a
-    developer outcome (that label outranks later business records). Outcomes come
-    from ``set_outcome()`` in the caller or from a connected business source.
+    developer outcome (a guessed label stays wrong until a business record corrects
+    it). Outcomes come from ``set_outcome()`` in the caller or from a connected
+    business source.
     """
     total_cost = getattr(msg, "total_cost_usd", None)
     if total_cost is None:
