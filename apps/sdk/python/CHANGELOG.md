@@ -11,6 +11,13 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ## [Unreleased]
 
+### Fixed — `claude_agent_sdk` no longer reports the CLI exit status as an outcome (MHQ-1914)
+
+The adapter used to call `set_outcome(success=not is_error)` from the final `ResultMessage`.
+`is_error` is how the CLI turn ended, not whether the task worked, and a developer-tier outcome
+outranked later business records. The adapter now records only aggregate cost from the
+`ResultMessage`; set outcomes with `set_outcome()` or a connected business source.
+
 ### Added — request details on `http` spans (MHQ-1892)
 
 - `http` spans from the httpx and requests auto-capture now carry `http.request.method`, `url.path`

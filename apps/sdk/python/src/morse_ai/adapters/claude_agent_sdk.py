@@ -800,12 +800,14 @@ _LIFECYCLE_MESSAGES = (
 
 
 def _apply_result_message(traced_run: TracedRun, msg: Any) -> None:
-    """Stamp outcome + aggregate cost from a ResultMessage onto OUR trace.
+    """Stamp aggregate cost from a ResultMessage onto OUR trace.
 
-    Only called for a trace this adapter opened. When the caller supplied the
-    trace, its outcome is theirs to decide.
+    Only called for a trace this adapter opened. MHQ-1914: ``is_error`` is the CLI's
+    exit status, not whether the task worked, so it is never written as a
+    developer outcome (a guessed label stays wrong until a business record corrects
+    it). Outcomes come from ``set_outcome()`` in the caller or from a connected
+    business source.
     """
-    traced_run.set_outcome(success=not getattr(msg, "is_error", False))
     total_cost = getattr(msg, "total_cost_usd", None)
     if total_cost is None:
         return

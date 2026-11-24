@@ -122,7 +122,7 @@ def test_module_query_inside_a_run_joins_that_trace_rather_than_opening_one():
     assert len(_llm_spans(trace)) == 1
 
 
-def test_module_query_result_message_sets_outcome_and_aggregate_cost():
+def test_module_query_result_message_records_aggregate_cost_not_outcome():
     traced = adapter._wrap_module_query(
         _fake_query(
             [_assistant(), ResultMessage(is_error=False, total_cost_usd=0.1234)]
@@ -132,19 +132,20 @@ def test_module_query_result_message_sets_outcome_and_aggregate_cost():
     _drain(traced, prompt="hi")
 
     trace = tracing._get_last_trace()
-    assert trace["trace"]["success"] is True
+    # MHQ-1914: the CLI exit status is not an outcome.
+    assert trace["trace"].get("success") is None
     root = next(s for s in trace["spans"] if s.get("type") == "agent")
     assert root["metadata"]["sdk_total_cost_usd"] == 0.1234
 
 
-def test_module_query_result_message_error_marks_the_trace_failed():
+def test_module_query_result_message_error_does_not_stamp_an_outcome():
     traced = adapter._wrap_module_query(
         _fake_query([_assistant(), ResultMessage(is_error=True)])
     )
 
     _drain(traced, prompt="hi")
 
-    assert tracing._get_last_trace()["trace"]["success"] is False
+    assert tracing._get_last_trace()["trace"].get("success") is None
 
 
 def test_module_query_does_not_claim_the_callers_outcome():
