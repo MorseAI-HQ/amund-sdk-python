@@ -15,7 +15,7 @@ If `../morse-bizops/GEMINI.md` was not auto-inlined (for example, in a standalon
 
 ## 2. Repo Scope & Local Authoritative Docs (`morse-sdk-python`)
 
-- **Role:** Python SDK (`morse-ai` on PyPI) and framework adapters (Anthropic, OpenAI, OpenAI Agents, LangGraph, LangChain).
+- **Role:** Python SDK (`amund` on PyPI, import `amund`; `morse-ai` kept as a compatibility shim in `apps/sdk/python/compat/morse-ai`) and framework adapters (Anthropic, OpenAI, OpenAI Agents, LangGraph, LangChain).
 - **Read locally:**
 - `README.md`
 - `apps/sdk/python/README.md`

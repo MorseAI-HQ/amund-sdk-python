@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `morse-ai` are documented here.
+All notable changes to `amund` (published as `morse-ai` up to 0.9.0) are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -10,6 +10,34 @@ their first public release because they reached feature parity there, not
 because they are released in lockstep. Expect the numbers to diverge.
 
 ## [Unreleased]
+
+### Changed — the package is now `amund` (`morse-ai` becomes a compatibility shim)
+
+Morse is now Amund. **BREAKING for packaging only; existing code keeps running.**
+
+- The distribution is `amund` (`pip install amund`) and the import package is `amund`
+  (`import amund`, `from amund.adapters.openai import ...`). Extras are unchanged
+  (`amund[anthropic]`, `amund[all]`, ...). The version line continues from `morse-ai`.
+- `morse-ai` is still published from this repo, at the same version, as a compatibility shim:
+  its wheel contains only a `morse_ai` package and depends on `amund==<same version>` (every
+  extra is mirrored, e.g. `morse-ai[anthropic]` pulls `amund[anthropic]`). `import morse_ai`
+  returns the `amund` module itself, and an import hook maps every `morse_ai.<sub>` to the
+  already-loaded `amund.<sub>` module, so `isinstance` checks, singletons and
+  `mock.patch("morse_ai....")` targets keep working. Importing it emits one `DeprecationWarning`
+  pointing to `pip install amund` / `import amund`. `pip uninstall morse-ai` leaves `amund` working.
+- Environment variables are now `AMUND_*` (`AMUND_API_KEY`, `AMUND_ENDPOINT`, `AMUND_DISABLED`,
+  `AMUND_CAPTURE_*`, ...). Every `MORSE_*` name is still read as a fallback. When both are set to
+  non-empty values, `AMUND_*` wins (a debug log on the `amund._internal` logger notes the conflict
+  once per name, without the values). All reads go through `amund._internal.env.get()`.
+- The SDK's logger is now `amund` (`amund._internal` for diagnostics), was `morse_ai`. If you set
+  its level or handlers by name, rename it. SDK log lines are prefixed `amund:`.
+- Product name in messages and docs is Amund; package URLs point to https://amundai.com,
+  https://docs.amundai.com and https://github.com/MorseAI-HQ/amund-sdk-python.
+- **Unchanged on the wire:** span and resource attribute keys (`morse.*`, `morse_ai.framework`,
+  `morse_ai.source`), the OTel instrumentation scope name (`morse_ai`), diagnostics fingerprints,
+  `X-Morse-*` headers, the `morse_ai-python/<version>` User-Agent, the `morse_ai.sdk` default log
+  service name, and the default endpoint (as in 0.9.1rc1 below). Dashboards, alerts and server-side parsing see
+  no difference.
 
 ## [0.9.1rc1] — 2026-11-25
 

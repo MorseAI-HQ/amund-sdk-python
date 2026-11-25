@@ -10,7 +10,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "morse-ai"
-version = "0.9.0"
+version = "0.9.1rc1"
 description = "Deprecated: renamed to 'amund'. Installs amund and keeps `import morse_ai` working."
 readme = "README.md"
 license = "MIT"
@@ -25,19 +25,19 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
-dependencies = ["amund==0.9.0"]
+dependencies = ["amund==0.9.1rc1"]
 
 # Same extras as amund, so `pip install "morse-ai[anthropic]"` keeps working.
 [project.optional-dependencies]
-anthropic = ["amund[anthropic]==0.9.0"]
-openai = ["amund[openai]==0.9.0"]
-openai_agents = ["amund[openai_agents]==0.9.0"]
-langchain = ["amund[langchain]==0.9.0"]
-langgraph = ["amund[langgraph]==0.9.0"]
-claude_agent_sdk = ["amund[claude_agent_sdk]==0.9.0"]
-strands = ["amund[strands]==0.9.0"]
-google_genai = ["amund[google_genai]==0.9.0"]
-all = ["amund[all]==0.9.0"]
+anthropic = ["amund[anthropic]==0.9.1rc1"]
+openai = ["amund[openai]==0.9.1rc1"]
+openai_agents = ["amund[openai_agents]==0.9.1rc1"]
+langchain = ["amund[langchain]==0.9.1rc1"]
+langgraph = ["amund[langgraph]==0.9.1rc1"]
+claude_agent_sdk = ["amund[claude_agent_sdk]==0.9.1rc1"]
+strands = ["amund[strands]==0.9.1rc1"]
+google_genai = ["amund[google_genai]==0.9.1rc1"]
+all = ["amund[all]==0.9.1rc1"]
 
 [project.urls]
 Homepage = "https://amundai.com"
