@@ -1,7 +1,7 @@
 # Standalone template: copy to .github/workflows/release-python.yml.
 # Rebind registry trusted publishers to this repository before enabling Actions.
 # Release tag pushes/dispatches require founder approval of the reviewed release.
-name: Release — Python SDK (morse-ai)
+name: Release — Python SDK (amund + morse-ai shim)
 
 # MHQ-65 — tag-triggered release pipeline for the Python SDK.
 # See engineering/SDK_PUBLISHING.md §5 for the full design writeup.
@@ -26,6 +26,17 @@ name: Release — Python SDK (morse-ai)
 #
 # Uses PyPI Trusted Publishing (OIDC) — no PYPI_API_TOKEN secret. Requires
 # the one-time pending-publisher config described in SDK_PUBLISHING.md §0.1.
+#
+# TWO distributions ship from every tag (Morse -> Amund rename, 2026-11-25):
+#   - `amund`     — the SDK itself (apps/sdk/python, `import amund`).
+#   - `morse-ai`  — a compatibility shim (apps/sdk/python/compat/morse-ai) whose
+#                   wheel holds only a `morse_ai` alias package and pins
+#                   `amund==<same version>`, so existing installs keep working.
+# Both carry the same version and are published in that order (amund first, so
+# the shim's exact pin is installable the moment the shim appears). Each PyPI
+# and TestPyPI project needs its own trusted publisher bound to this workflow:
+# `amund` is a new project and needs a pending publisher before its first
+# release (SDK_PUBLISHING.md §0.1, same fields as `morse-ai`).
 
 on:
   push:
@@ -58,6 +69,7 @@ permissions:
 
 env:
   WORKING_DIR: apps/sdk/python
+  SHIM_DIR: apps/sdk/python/compat/morse-ai
 
 jobs:
   determine-channel:
@@ -75,9 +87,20 @@ jobs:
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#sdk-python-v}"
           FILE_VERSION="$(grep -m1 '^version = ' pyproject.toml | sed -E 's/version = "(.*)"/\1/')"
+          SHIM_VERSION="$(grep -m1 '^version = ' compat/morse-ai/pyproject.toml | sed -E 's/version = "(.*)"/\1/')"
 
           if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
             echo "::error::Tag version ($TAG_VERSION) does not match pyproject.toml version ($FILE_VERSION) at this commit. Bump and commit the version before tagging."
+            exit 1
+          fi
+
+          # The morse-ai shim ships in lockstep with amund and pins it exactly.
+          if [ "$SHIM_VERSION" != "$FILE_VERSION" ]; then
+            echo "::error::compat/morse-ai version ($SHIM_VERSION) does not match amund ($FILE_VERSION). Bump both together."
+            exit 1
+          fi
+          if ! grep -q "^dependencies = \[\"amund==${FILE_VERSION}\"\]" compat/morse-ai/pyproject.toml; then
+            echo "::error::compat/morse-ai must depend on exactly amund==${FILE_VERSION}."
             exit 1
           fi
 
@@ -90,7 +113,7 @@ jobs:
 
           echo "version=$FILE_VERSION" >> "$GITHUB_OUTPUT"
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
-          echo "Releasing morse-ai $FILE_VERSION on the $CHANNEL channel"
+          echo "Releasing amund + morse-ai $FILE_VERSION on the $CHANNEL channel"
 
   build-and-test:
     name: Build + test
@@ -112,7 +135,7 @@ jobs:
       - name: Test
         working-directory: ${{ env.WORKING_DIR }}
         # -m "not integration" excludes tests/test_integration.py, which needs
-        # a live Morse backend + MORSE_API_KEY (see that file's own docstring)
+        # a live Amund backend + AMUND_API_KEY (see that file's own docstring)
         # — not available on this runner. Nothing else in the suite needs it.
         run: uv run pytest -m "not integration"
 
@@ -128,17 +151,34 @@ jobs:
         # cleared; flip continue-on-error off once it's clean.
         working-directory: ${{ env.WORKING_DIR }}
         continue-on-error: true
-        run: uv run mypy src/morse_ai
+        run: uv run mypy src/amund
 
-      - name: Build distribution
+      - name: Build distributions (amund + morse-ai shim)
         working-directory: ${{ env.WORKING_DIR }}
+        # One directory per PyPI project, so each publish step uploads exactly
+        # one project and amund always goes out before the shim that pins it.
         run: |
           rm -rf dist/
-          uv build
+          uv build --out-dir dist/amund
+          uv build compat/morse-ai --out-dir dist/morse-ai
 
       - name: Validate package metadata
         working-directory: ${{ env.WORKING_DIR }}
-        run: uv tool run twine check dist/*
+        run: uv tool run twine check dist/amund/* dist/morse-ai/*
+
+      - name: Smoke-test the built wheels in a clean venv
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          uv venv /tmp/wheel-smoke
+          uv pip install -p /tmp/wheel-smoke/bin/python dist/amund/*.whl dist/morse-ai/*.whl
+          /tmp/wheel-smoke/bin/python - <<'PY'
+          import warnings
+          warnings.simplefilter("ignore", DeprecationWarning)
+          import amund, morse_ai, morse_ai.tracing, amund.tracing
+          assert morse_ai is amund and morse_ai.tracing is amund.tracing
+          PY
+          uv pip uninstall -p /tmp/wheel-smoke/bin/python morse-ai
+          /tmp/wheel-smoke/bin/python -c "import amund; print('amund', amund.__version__)"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -163,11 +203,18 @@ jobs:
           name: python-dist
           path: dist/
 
-      - name: Publish to TestPyPI
+      - name: Publish amund to TestPyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           repository-url: https://test.pypi.org/legacy/
-          packages-dir: dist/
+          packages-dir: dist/amund/
+          skip-existing: true
+
+      - name: Publish morse-ai (compat shim) to TestPyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/morse-ai/
           skip-existing: true
 
   publish-pypi:
@@ -184,7 +231,12 @@ jobs:
           name: python-dist
           path: dist/
 
-      - name: Publish to PyPI
+      - name: Publish amund to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
-          packages-dir: dist/
+          packages-dir: dist/amund/
+
+      - name: Publish morse-ai (compat shim) to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist/morse-ai/
