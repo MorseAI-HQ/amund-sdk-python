@@ -335,6 +335,10 @@ optional extra — every install speaks OTLP. `track()`/`batch_track()`
 are a lower-level, non-trace-shaped escape hatch of their own — prefer
 `record()`.
 
+Spans go to the Amund API at `https://api.amundai.com` by default. `https://api.morseai.dev`
+remains a supported alias for the same service. Set `MORSE_ENDPOINT` (or `init(endpoint=...)`)
+to send elsewhere.
+
 ## PII Redaction
 
 The SDK ships with PII redaction **on by default**. Span attributes and

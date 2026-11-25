@@ -134,6 +134,15 @@ def test_morse_ai_endpoint_host_auto_excluded(monkeypatch):
     assert _host_excluded("ingest.morsehq.dev") is True
 
 
+def test_prod_api_hosts_excluded_without_morse_endpoint(monkeypatch):
+    """The default host and the api.morseai.dev alias are both recognised as
+    Morse's own API, so its POSTs never self-trace even with no MORSE_ENDPOINT."""
+    monkeypatch.delenv("MORSE_ENDPOINT", raising=False)
+    enable_http_capture()
+    assert _host_excluded("api.amundai.com") is True
+    assert _host_excluded("api.morseai.dev") is True
+
+
 @pytest.mark.anyio
 async def test_async_httpx_capture():
     enable_http_capture()

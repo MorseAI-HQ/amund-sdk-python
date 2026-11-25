@@ -11,6 +11,20 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ## [Unreleased]
 
+## [0.9.1rc1] — 2026-11-25
+
+### Changed — default endpoint moves to api.amundai.com
+
+- Default endpoint is now https://api.amundai.com/api/v1/traces/batch. https://api.morseai.dev
+  remains a supported alias for the same service; a `MORSE_ENDPOINT` pinned to it keeps working.
+- HTTP auto-capture now recognises both production API hosts (`api.amundai.com`,
+  `api.morseai.dev`) as the SDK's own backend and never records calls to them as `http` spans,
+  even when `MORSE_ENDPOINT` is unset.
+- `api.morsehq.dev` is no longer a production host. A `MORSE_ENDPOINT` pointing at it is still
+  used as given, but traces sent there no longer reach production; switch to the default.
+- Package name (`morse-ai`), import name (`morse_ai`), environment variable names and `morse.*`
+  span attribute keys are unchanged.
+
 ### Fixed — `claude_agent_sdk` no longer reports the CLI exit status as an outcome (MHQ-1914)
 
 The adapter used to call `set_outcome(success=not is_error)` from the final `ResultMessage`.

@@ -110,7 +110,7 @@ def test_init_logs_destination_url_once(caplog: pytest.LogCaptureFixture) -> Non
         if "Morse SDK initialized" in r.getMessage()
     ]
     assert len(log_lines) == 1, f"expected 1 transparency log, got {len(log_lines)}"
-    assert "api.morseai.dev" in log_lines[0]
+    assert "api.amundai.com" in log_lines[0]
 
 
 def test_init_re_logs_when_endpoint_changes(caplog: pytest.LogCaptureFixture) -> None:
