@@ -11,6 +11,8 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ## [Unreleased]
 
+## [0.9.1rc1] — 2026-11-25
+
 ### Changed — the package is now `amund` (`morse-ai` becomes a compatibility shim)
 
 Morse is now Amund. **BREAKING for packaging only; existing code keeps running.**
@@ -36,10 +38,8 @@ Morse is now Amund. **BREAKING for packaging only; existing code keeps running.*
 - **Unchanged on the wire:** span and resource attribute keys (`morse.*`, `morse_ai.framework`,
   `morse_ai.source`), the OTel instrumentation scope name (`morse_ai`), diagnostics fingerprints,
   `X-Morse-*` headers, the `morse_ai-python/<version>` User-Agent, the `morse_ai.sdk` default log
-  service name, and the default endpoint (as in 0.9.1rc1 below). Dashboards, alerts and server-side parsing see
+  service name, and the default endpoint (see below). Dashboards, alerts and server-side parsing see
   no difference.
-
-## [0.9.1rc1] — 2026-11-25
 
 ### Changed — default endpoint moves to api.amundai.com
 
@@ -50,8 +50,12 @@ Morse is now Amund. **BREAKING for packaging only; existing code keeps running.*
   even when `MORSE_ENDPOINT` is unset.
 - `api.morsehq.dev` is no longer a production host. A `MORSE_ENDPOINT` pointing at it is still
   used as given, but traces sent there no longer reach production; switch to the default.
-- Package name (`morse-ai`), import name (`morse_ai`), environment variable names and `morse.*`
-  span attribute keys are unchanged.
+
+### Fixed — LangChain messages are recorded as JSON, not Python repr (MHQ-1936)
+
+- Message objects captured from LangChain (`HumanMessage`, `AIMessage`, ...) are serialized as
+  `{type, content, ...}` JSON instead of their Python `repr`, so the trace view shows readable
+  inputs and outputs.
 
 ### Fixed — `claude_agent_sdk` no longer reports the CLI exit status as an outcome (MHQ-1914)
 
