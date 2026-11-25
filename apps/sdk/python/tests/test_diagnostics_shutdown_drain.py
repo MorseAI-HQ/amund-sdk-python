@@ -1,4 +1,4 @@
-"""MHQ-946: ``morse_ai.shutdown()`` must drain the diagnostics buffer.
+"""MHQ-946: ``amund.shutdown()`` must drain the diagnostics buffer.
 
 Diagnostics keeps its own buffer and its own sender thread, deliberately
 separate from the telemetry transport. That thread is a **daemon** on a
@@ -20,7 +20,7 @@ interval, these fail.
 
 import pytest
 
-from morse_ai._internal import diagnostics
+from amund._internal import diagnostics
 
 
 @pytest.fixture(autouse=True)
@@ -164,8 +164,8 @@ def test_drain_never_raises_even_when_the_send_explodes(
 
 @pytest.mark.req("SDKDIAG-01")
 def test_public_shutdown_drains_diagnostics(monkeypatch):
-    """The wiring itself: morse_ai.shutdown(), not the internal helper."""
-    import morse_ai
+    """The wiring itself: amund.shutdown(), not the internal helper."""
+    import amund
 
     monkeypatch.setenv("MORSE_API_KEY", "mhq_test")  # pragma: allowlist secret
     monkeypatch.setenv("MORSE_ENDPOINT", "https://api.example.test")
@@ -180,7 +180,7 @@ def test_public_shutdown_drains_diagnostics(monkeypatch):
     except RuntimeError as exc:
         diagnostics.report(exc, fingerprint="public-shutdown-probe")
 
-    morse_ai.shutdown()
+    amund.shutdown()
 
-    assert len(client.posts) == 1, "morse_ai.shutdown() did not drain diagnostics"
+    assert len(client.posts) == 1, "amund.shutdown() did not drain diagnostics"
     assert b"public-shutdown-probe" in client.posts[0]

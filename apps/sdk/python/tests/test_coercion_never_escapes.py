@@ -25,9 +25,9 @@ from __future__ import annotations
 
 import pytest
 
-import morse_ai
-from morse_ai._internal import diagnostics
-from morse_ai.tracing import _active_trace, coerce_dims
+import amund
+from amund._internal import diagnostics
+from amund.tracing import _active_trace, coerce_dims
 
 
 class Detonator:
@@ -46,7 +46,7 @@ def _reset(monkeypatch):
     # target the diagnostics sender is never built, so these tests never start
     # its thread. That matters beyond tidiness — `_reset_for_testing()` sets
     # `_sender = None` but cannot join the thread, which is parked in a 5s
-    # sleep, so a test that builds one leaves a live `morse_ai-diagnostics`
+    # sleep, so a test that builds one leaves a live `amund-diagnostics`
     # thread behind and breaks SDKDIAG-01's "a healthy process arms nothing"
     # assertion in whichever file runs next. Observed exactly that.
     #
@@ -55,10 +55,10 @@ def _reset(monkeypatch):
     for var in ("MORSE_API_KEY", "MORSE_ENDPOINT"):
         monkeypatch.delenv(var, raising=False)
     diagnostics._reset_for_testing()
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
     yield
     diagnostics._reset_for_testing()
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
 
 
 def test_coerce_dims_drops_only_the_offender():
@@ -86,9 +86,9 @@ def test_coerce_dims_reports_each_failure(monkeypatch):
 
 
 def test_set_context_does_not_raise_into_host_code():
-    with morse_ai.run("coercion-probe"):
+    with amund.run("coercion-probe"):
         # Before MHQ-947 this raised RuntimeError straight through.
-        morse_ai.set_context(customer_id="cust-42", feature=Detonator(), team="core")
+        amund.set_context(customer_id="cust-42", feature=Detonator(), team="core")
 
         state = _active_trace.get(None)
         assert state is not None
@@ -98,7 +98,7 @@ def test_set_context_does_not_raise_into_host_code():
 def test_run_user_metadata_does_not_break_trace_start():
     body_ran = False
     # Before MHQ-947 the `with` never opened: coercion happened in __enter__.
-    with morse_ai.run(
+    with amund.run(
         "coercion-probe", user_metadata={"customer_id": "cust-7", "bad": Detonator()}
     ):
         body_ran = True

@@ -12,11 +12,11 @@ import logging
 
 import pytest
 
-import morse_ai
-from morse_ai import tracing
-from morse_ai._internal import attribution, env
-from morse_ai._internal.redaction import RedactionConfig
-from morse_ai.otel_provider import get_engine
+import amund
+from amund import tracing
+from amund._internal import attribution, env
+from amund._internal.redaction import RedactionConfig
+from amund.otel_provider import get_engine
 
 _KEY = "av_test_key"  # pragma: allowlist secret
 # Never the default production endpoint: a fake key there returns 401, and the
@@ -39,11 +39,11 @@ _GIT_VARS = (
 def _clean(monkeypatch):
     for var in (*_GIT_VARS, "OTEL_RESOURCE_ATTRIBUTES", "OTEL_SERVICE_NAME"):
         monkeypatch.delenv(var, raising=False)
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
     tracing._transport = None
     tracing._last_trace = None
     yield
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
 
 
 @pytest.fixture
@@ -92,38 +92,38 @@ def _trace() -> dict:
 
 @pytest.mark.req("ATTR-01")
 def test_link_record_exported_from_package():
-    assert callable(morse_ai.link_record)
-    assert "link_record" in morse_ai.__all__
+    assert callable(amund.link_record)
+    assert "link_record" in amund.__all__
 
 
 @pytest.mark.req("ATTR-01")
 def test_link_record_outside_trace_is_noop_with_debug_log(caplog):
-    with caplog.at_level(logging.DEBUG, logger="morse_ai"):
-        morse_ai.link_record("zendesk_ticket", "4812")  # must not raise
+    with caplog.at_level(logging.DEBUG, logger="amund"):
+        amund.link_record("zendesk_ticket", "4812")  # must not raise
     assert "no open trace" in caplog.text
 
 
 @pytest.mark.req("ATTR-01")
 def test_link_record_accumulates_and_lands_on_json_trace():
-    with morse_ai.run("agent"):
-        morse_ai.link_record("zendesk_ticket", "4812")
-        morse_ai.link_record("order_id", 99)
+    with amund.run("agent"):
+        amund.link_record("zendesk_ticket", "4812")
+        amund.link_record("order_id", 99)
     assert _trace()["record_keys"] == {"zendesk_ticket": "4812", "order_id": "99"}
 
 
 @pytest.mark.req("ATTR-01")
 def test_link_record_repeated_type_replaces_value():
-    with morse_ai.run("agent"):
-        morse_ai.link_record("ticket", "1")
-        morse_ai.link_record("ticket", "2")
+    with amund.run("agent"):
+        amund.link_record("ticket", "1")
+        amund.link_record("ticket", "2")
     assert _trace()["record_keys"] == {"ticket": "2"}
 
 
 @pytest.mark.req("ATTR-01")
 def test_link_record_works_under_trace_agent():
-    @morse_ai.trace_agent("decorated")
+    @amund.trace_agent("decorated")
     def go():
-        morse_ai.link_record("ticket", "7")
+        amund.link_record("ticket", "7")
 
     go()
     assert _trace()["record_keys"] == {"ticket": "7"}
@@ -131,8 +131,8 @@ def test_link_record_works_under_trace_agent():
 
 @pytest.mark.req("ATTR-01")
 def test_run_record_keys_kwarg_merges_with_link_record():
-    with morse_ai.run("agent", record_keys={"Ticket": 12, "crm.deal": "d-1"}):
-        morse_ai.link_record("order_id", "o-9")
+    with amund.run("agent", record_keys={"Ticket": 12, "crm.deal": "d-1"}):
+        amund.link_record("order_id", "o-9")
     assert _trace()["record_keys"] == {
         "ticket": "12",
         "crm.deal": "d-1",
@@ -142,8 +142,8 @@ def test_run_record_keys_kwarg_merges_with_link_record():
 
 @pytest.mark.req("ATTR-01")
 def test_key_type_is_lowercased_and_value_trimmed():
-    with morse_ai.run("agent"):
-        morse_ai.link_record("  Zendesk_Ticket ", "  4812  ")
+    with amund.run("agent"):
+        amund.link_record("  Zendesk_Ticket ", "  4812  ")
     assert _trace()["record_keys"] == {"zendesk_ticket": "4812"}
 
 
@@ -166,26 +166,26 @@ def test_key_type_is_lowercased_and_value_trimmed():
     ],
 )
 def test_invalid_keys_are_dropped_without_raising(key_type, key_value, caplog):
-    with caplog.at_level(logging.DEBUG, logger="morse_ai"), morse_ai.run("agent"):
-        morse_ai.link_record(key_type, key_value)  # type: ignore[arg-type]
+    with caplog.at_level(logging.DEBUG, logger="amund"), amund.run("agent"):
+        amund.link_record(key_type, key_value)  # type: ignore[arg-type]
     assert "record_keys" not in _trace()
     assert "dropped" in caplog.text
 
 
 @pytest.mark.req("ATTR-01")
 def test_boundary_lengths_are_accepted():
-    with morse_ai.run("agent"):
-        morse_ai.link_record("a" * 64, "v" * 256)
+    with amund.run("agent"):
+        amund.link_record("a" * 64, "v" * 256)
     assert _trace()["record_keys"] == {"a" * 64: "v" * 256}
 
 
 @pytest.mark.req("ATTR-01")
 def test_key_cap_of_20_per_trace():
-    with morse_ai.run("agent"):
+    with amund.run("agent"):
         for i in range(25):
-            morse_ai.link_record(f"k{i}", str(i))
+            amund.link_record(f"k{i}", str(i))
         # an existing type can still be updated once the cap is reached
-        morse_ai.link_record("k0", "updated")
+        amund.link_record("k0", "updated")
     keys = _trace()["record_keys"]
     assert len(keys) == attribution.MAX_RECORD_KEYS == 20
     assert keys["k0"] == "updated"
@@ -198,21 +198,21 @@ def test_hostile_value_str_never_escapes():
         def __str__(self) -> str:
             raise RuntimeError("customer __str__ exploded")
 
-    with morse_ai.run("agent", record_keys={"bad": Boom(), "good": "1"}):  # type: ignore[dict-item]
-        morse_ai.link_record("also_bad", Boom())  # type: ignore[arg-type]
+    with amund.run("agent", record_keys={"bad": Boom(), "good": "1"}):  # type: ignore[dict-item]
+        amund.link_record("also_bad", Boom())  # type: ignore[arg-type]
     assert _trace()["record_keys"] == {"good": "1"}
 
 
 @pytest.mark.req("ATTR-01")
 def test_malformed_record_keys_kwarg_never_fails_trace_start():
-    with morse_ai.run("agent", record_keys=["not", "a", "dict"]):  # type: ignore[arg-type]
+    with amund.run("agent", record_keys=["not", "a", "dict"]):  # type: ignore[arg-type]
         pass
     assert "record_keys" not in _trace()
 
 
 @pytest.mark.req("ATTR-01")
 def test_no_attribution_fields_when_nothing_declared():
-    with morse_ai.run("agent"):
+    with amund.run("agent"):
         pass
     trace = _trace()
     for field in ("record_keys", "agent_version", "prompts"):
@@ -221,8 +221,8 @@ def test_no_attribution_fields_when_nothing_declared():
 
 @pytest.mark.req("ATTR-01")
 def test_record_keys_become_root_span_attributes_on_otlp(engine):
-    with morse_ai.run("agent", record_keys={"order_id": 5}) as r:
-        morse_ai.link_record("zendesk_ticket", "4812")
+    with amund.run("agent", record_keys={"order_id": 5}) as r:
+        amund.link_record("zendesk_ticket", "4812")
         trace_id = r.trace_id
     attrs = dict(_otel_root(engine, trace_id).attributes)
     assert attrs["morse.record_key.order_id"] == "5"
@@ -236,28 +236,28 @@ def test_record_keys_become_root_span_attributes_on_otlp(engine):
 
 @pytest.mark.req("ATTR-04")
 def test_init_agent_version_is_default_for_every_trace():
-    morse_ai.init(api_key=_KEY, endpoint=_DEAD_ENDPOINT, agent_version="2.4.1")
-    with morse_ai.run("agent"):
+    amund.init(api_key=_KEY, endpoint=_DEAD_ENDPOINT, agent_version="2.4.1")
+    with amund.run("agent"):
         pass
     assert _trace()["agent_version"] == "2.4.1"
 
 
 @pytest.mark.req("ATTR-04")
 def test_run_agent_version_overrides_init_default():
-    morse_ai.init(api_key=_KEY, endpoint=_DEAD_ENDPOINT, agent_version="2.4.1")
-    with morse_ai.run("agent", agent_version="2.5.0-rc1"):
+    amund.init(api_key=_KEY, endpoint=_DEAD_ENDPOINT, agent_version="2.4.1")
+    with amund.run("agent", agent_version="2.5.0-rc1"):
         pass
     assert _trace()["agent_version"] == "2.5.0-rc1"
-    with morse_ai.run("agent"):
+    with amund.run("agent"):
         pass
     assert _trace()["agent_version"] == "2.4.1"
 
 
 @pytest.mark.req("ATTR-04")
 def test_agent_version_applies_to_trace_agent_decorator():
-    morse_ai.init(api_key=_KEY, endpoint=_DEAD_ENDPOINT, agent_version="9.9")
+    amund.init(api_key=_KEY, endpoint=_DEAD_ENDPOINT, agent_version="9.9")
 
-    @morse_ai.trace_agent("decorated")
+    @amund.trace_agent("decorated")
     def go():
         return 1
 
@@ -267,20 +267,20 @@ def test_agent_version_applies_to_trace_agent_decorator():
 
 @pytest.mark.req("ATTR-04")
 def test_agent_version_is_stripped_truncated_and_blank_ignored():
-    with morse_ai.run("agent", agent_version="  v" + "1" * 200 + "  "):
+    with amund.run("agent", agent_version="  v" + "1" * 200 + "  "):
         pass
     value = _trace()["agent_version"]
     assert len(value) == attribution.MAX_AGENT_VERSION_LEN == 128
     assert value.startswith("v1")
-    with morse_ai.run("agent", agent_version="   "):
+    with amund.run("agent", agent_version="   "):
         pass
     assert "agent_version" not in _trace()
 
 
 @pytest.mark.req("ATTR-04")
 def test_agent_version_is_root_span_attribute_on_otlp(engine):
-    with morse_ai.run("agent", agent_version="2.4.1") as r:
-        with morse_ai.span("child"):
+    with amund.run("agent", agent_version="2.4.1") as r:
+        with amund.span("child"):
             pass
         trace_id = r.trace_id
     spans = _otel_spans(engine, trace_id)
@@ -297,22 +297,22 @@ def test_agent_version_is_root_span_attribute_on_otlp(engine):
 
 @pytest.mark.req("ATTR-04")
 def test_set_prompt_exported_from_package():
-    assert callable(morse_ai.set_prompt)
-    assert "set_prompt" in morse_ai.__all__
+    assert callable(amund.set_prompt)
+    assert "set_prompt" in amund.__all__
 
 
 @pytest.mark.req("ATTR-04")
 def test_set_prompt_outside_trace_is_noop_with_debug_log(caplog):
-    with caplog.at_level(logging.DEBUG, logger="morse_ai"):
-        morse_ai.set_prompt("triage", 7)
+    with caplog.at_level(logging.DEBUG, logger="amund"):
+        amund.set_prompt("triage", 7)
     assert "no open trace" in caplog.text
 
 
 @pytest.mark.req("ATTR-04")
 def test_set_prompt_with_and_without_version_at_trace_level():
-    with morse_ai.run("agent"):
-        morse_ai.set_prompt("triage", version=7)
-        morse_ai.set_prompt("summarise")
+    with amund.run("agent"):
+        amund.set_prompt("triage", version=7)
+        amund.set_prompt("summarise")
     assert _trace()["prompts"] == [
         {"name": "triage", "version": 7},
         {"name": "summarise"},
@@ -321,8 +321,8 @@ def test_set_prompt_with_and_without_version_at_trace_level():
 
 @pytest.mark.req("ATTR-04")
 def test_set_prompt_inside_span_pins_the_span_id():
-    with morse_ai.run("agent"), morse_ai.span("llm-call"):
-        morse_ai.set_prompt("triage", 3)
+    with amund.run("agent"), amund.span("llm-call"):
+        amund.set_prompt("triage", 3)
     payload = tracing._get_last_trace()
     assert payload is not None
     child = next(s for s in payload["spans"] if s["name"] == "llm-call")
@@ -333,19 +333,19 @@ def test_set_prompt_inside_span_pins_the_span_id():
 
 @pytest.mark.req("ATTR-04")
 def test_set_prompt_after_span_closes_is_trace_level_again():
-    with morse_ai.run("agent"):
-        with morse_ai.span("llm-call"):
+    with amund.run("agent"):
+        with amund.span("llm-call"):
             pass
-        morse_ai.set_prompt("triage")
+        amund.set_prompt("triage")
     assert "span_id" not in _trace()["prompts"][0]
 
 
 @pytest.mark.req("ATTR-04")
 def test_set_prompt_duplicates_collapse():
-    with morse_ai.run("agent"):
-        morse_ai.set_prompt("triage", 1)
-        morse_ai.set_prompt("triage", 1)
-        morse_ai.set_prompt("triage", 2)
+    with amund.run("agent"):
+        amund.set_prompt("triage", 1)
+        amund.set_prompt("triage", 1)
+        amund.set_prompt("triage", 2)
     assert _trace()["prompts"] == [
         {"name": "triage", "version": 1},
         {"name": "triage", "version": 2},
@@ -355,8 +355,8 @@ def test_set_prompt_duplicates_collapse():
 @pytest.mark.req("ATTR-04")
 @pytest.mark.parametrize("bad_version", [0, -1, "latest", "2026-10-01", 1.5, True])
 def test_invalid_version_is_dropped_but_name_kept(bad_version):
-    with morse_ai.run("agent"):
-        morse_ai.set_prompt("triage", bad_version)  # type: ignore[arg-type]
+    with amund.run("agent"):
+        amund.set_prompt("triage", bad_version)  # type: ignore[arg-type]
     assert _trace()["prompts"] == [{"name": "triage"}]
 
 
@@ -364,19 +364,19 @@ def test_invalid_version_is_dropped_but_name_kept(bad_version):
 @pytest.mark.parametrize(("given", "expected"), [("7", 7), ("v12", 12), (" 3 ", 3)])
 def test_whole_number_string_version_is_read_not_dropped(given, expected):
     """MHQ-1415: a string version used to vanish silently."""
-    with morse_ai.run("agent"):
-        morse_ai.set_prompt("triage", given)
+    with amund.run("agent"):
+        amund.set_prompt("triage", given)
     assert _trace()["prompts"] == [{"name": "triage", "version": expected}]
 
 
 @pytest.mark.req("MHQ-1415")
 def test_unreadable_version_warns_once(caplog, monkeypatch):
-    from morse_ai._internal import attribution
+    from amund._internal import attribution
 
     monkeypatch.setattr(attribution, "_prompt_version_warned", False)
-    with caplog.at_level("WARNING", logger="morse_ai"), morse_ai.run("agent"):
-        morse_ai.set_prompt("a", "latest")
-        morse_ai.set_prompt("b", "latest")
+    with caplog.at_level("WARNING", logger="amund"), amund.run("agent"):
+        amund.set_prompt("a", "latest")
+        amund.set_prompt("b", "latest")
     warnings = [r for r in caplog.records if "set_prompt() version" in r.getMessage()]
     assert len(warnings) == 1
 
@@ -384,16 +384,16 @@ def test_unreadable_version_warns_once(caplog, monkeypatch):
 @pytest.mark.req("ATTR-04")
 @pytest.mark.parametrize("bad_name", ["", "   ", None, 5, "n" * 256])
 def test_invalid_name_is_dropped_without_raising(bad_name):
-    with morse_ai.run("agent"):
-        morse_ai.set_prompt(bad_name, 1)  # type: ignore[arg-type]
+    with amund.run("agent"):
+        amund.set_prompt(bad_name, 1)  # type: ignore[arg-type]
     assert "prompts" not in _trace()
 
 
 @pytest.mark.req("ATTR-04")
 def test_prompt_ref_cap_of_20_per_trace():
-    with morse_ai.run("agent"):
+    with amund.run("agent"):
         for i in range(30):
-            morse_ai.set_prompt(f"p{i}", 1)
+            amund.set_prompt(f"p{i}", 1)
     prompts = _trace()["prompts"]
     assert len(prompts) == attribution.MAX_PROMPT_REFS == 20
     assert prompts[-1]["name"] == "p19"
@@ -401,8 +401,8 @@ def test_prompt_ref_cap_of_20_per_trace():
 
 @pytest.mark.req("ATTR-04")
 def test_otlp_prompt_on_root_span_when_set_outside_a_span(engine):
-    with morse_ai.run("agent") as r:
-        morse_ai.set_prompt("triage", 7)
+    with amund.run("agent") as r:
+        amund.set_prompt("triage", 7)
         trace_id = r.trace_id
     attrs = dict(_otel_root(engine, trace_id).attributes)
     assert attrs["morse.prompt.name"] == "triage"
@@ -411,8 +411,8 @@ def test_otlp_prompt_on_root_span_when_set_outside_a_span(engine):
 
 @pytest.mark.req("ATTR-04")
 def test_otlp_prompt_without_version_has_no_version_attr(engine):
-    with morse_ai.run("agent") as r:
-        morse_ai.set_prompt("triage")
+    with amund.run("agent") as r:
+        amund.set_prompt("triage")
         trace_id = r.trace_id
     attrs = dict(_otel_root(engine, trace_id).attributes)
     assert attrs["morse.prompt.name"] == "triage"
@@ -421,10 +421,10 @@ def test_otlp_prompt_without_version_has_no_version_attr(engine):
 
 @pytest.mark.req("ATTR-04")
 def test_otlp_prompt_lands_on_the_span_it_was_set_in(engine):
-    with morse_ai.run("agent") as r:
-        morse_ai.set_prompt("root-prompt", 1)
-        with morse_ai.span("llm-call"):
-            morse_ai.set_prompt("span-prompt", 2)
+    with amund.run("agent") as r:
+        amund.set_prompt("root-prompt", 1)
+        with amund.span("llm-call"):
+            amund.set_prompt("span-prompt", 2)
         trace_id = r.trace_id
     spans = {s.name: dict(s.attributes) for s in _otel_spans(engine, trace_id)}
     assert spans["agent"]["morse.prompt.name"] == "root-prompt"
@@ -435,10 +435,10 @@ def test_otlp_prompt_lands_on_the_span_it_was_set_in(engine):
 
 @pytest.mark.req("ATTR-04")
 def test_otlp_last_prompt_per_span_wins_but_json_keeps_all(engine):
-    with morse_ai.run("agent") as r:
-        with morse_ai.span("llm-call"):
-            morse_ai.set_prompt("first", 1)
-            morse_ai.set_prompt("second", 2)
+    with amund.run("agent") as r:
+        with amund.span("llm-call"):
+            amund.set_prompt("first", 1)
+            amund.set_prompt("second", 2)
         trace_id = r.trace_id
     spans = {s.name: dict(s.attributes) for s in _otel_spans(engine, trace_id)}
     assert spans["llm-call"]["morse.prompt.name"] == "second"
@@ -448,9 +448,9 @@ def test_otlp_last_prompt_per_span_wins_but_json_keeps_all(engine):
 
 @pytest.mark.req("ATTR-04")
 def test_otlp_version_does_not_leak_from_a_versionless_later_ref(engine):
-    with morse_ai.run("agent") as r:
-        morse_ai.set_prompt("a", 5)
-        morse_ai.set_prompt("b")
+    with amund.run("agent") as r:
+        amund.set_prompt("a", 5)
+        amund.set_prompt("b")
         trace_id = r.trace_id
     attrs = dict(_otel_root(engine, trace_id).attributes)
     assert attrs["morse.prompt.name"] == "b"
@@ -502,8 +502,8 @@ def test_morse_git_revision_reaches_json_resource_and_otlp_resource(
     monkeypatch, engine
 ):
     monkeypatch.setenv("MORSE_GIT_REVISION", "abc123")
-    morse_ai.init(api_key=_KEY, endpoint=_DEAD_ENDPOINT)
-    with morse_ai.run("agent"):
+    amund.init(api_key=_KEY, endpoint=_DEAD_ENDPOINT)
+    with amund.run("agent"):
         pass
     payload = tracing._get_last_trace()
     assert payload is not None
@@ -522,7 +522,7 @@ def test_morse_git_revision_reaches_json_resource_and_otlp_resource(
         redaction_config=RedactionConfig.build(enabled=True),
         capture_for_tests=True,
     )
-    with morse_ai.run("agent") as r:
+    with amund.run("agent") as r:
         trace_id = r.trace_id
     resource = dict(_otel_root(engine, trace_id).resource.attributes)
     assert resource["git.revision"] == "abc123"
@@ -568,8 +568,8 @@ def test_service_version_is_capped_at_128(monkeypatch):
 @pytest.mark.req("ATTR-06")
 def test_service_version_reaches_json_resource(monkeypatch):
     monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "service.version=2.4.1")
-    morse_ai.init(api_key=_KEY, endpoint=_DEAD_ENDPOINT)
-    with morse_ai.run("agent"):
+    amund.init(api_key=_KEY, endpoint=_DEAD_ENDPOINT)
+    with amund.run("agent"):
         pass
     payload = tracing._get_last_trace()
     assert payload is not None
@@ -579,8 +579,8 @@ def test_service_version_reaches_json_resource(monkeypatch):
 @pytest.mark.req("ATTR-06")
 def test_service_version_absent_from_json_resource_when_unset(monkeypatch):
     monkeypatch.setenv("MORSE_GIT_REVISION", "abc")  # force a resource dict
-    morse_ai.init(api_key=_KEY, endpoint=_DEAD_ENDPOINT)
-    with morse_ai.run("agent"):
+    amund.init(api_key=_KEY, endpoint=_DEAD_ENDPOINT)
+    with amund.run("agent"):
         pass
     payload = tracing._get_last_trace()
     assert payload is not None
@@ -602,7 +602,7 @@ def test_service_version_reaches_otlp_resource(monkeypatch, engine):
         redaction_config=RedactionConfig.build(enabled=True),
         capture_for_tests=True,
     )
-    with morse_ai.run("agent") as r:
+    with amund.run("agent") as r:
         trace_id = r.trace_id
     resource = dict(_otel_root(engine, trace_id).resource.attributes)
     assert resource["service.version"] == "2.4.1+x"
@@ -614,7 +614,7 @@ def test_service_name_in_env_still_never_becomes_agent_identity(monkeypatch, eng
     monkeypatch.setenv(
         "OTEL_RESOURCE_ATTRIBUTES", "service.version=1,service.name=proc"
     )
-    with morse_ai.run("explicit") as r:
+    with amund.run("explicit") as r:
         trace_id = r.trace_id
     attrs = dict(_otel_root(engine, trace_id).attributes)
     assert attrs["morse.agent"] == "explicit"
@@ -627,8 +627,8 @@ def test_service_name_in_env_still_never_becomes_agent_identity(monkeypatch, eng
 
 @pytest.mark.req("ATTR-01", "ATTR-04")
 def test_nothing_raises_on_garbage_input():
-    with morse_ai.run("agent", record_keys={1: 2, None: None}, agent_version=object()):  # type: ignore[dict-item,arg-type]
-        morse_ai.link_record(object(), object())  # type: ignore[arg-type]
-        morse_ai.set_prompt(object(), object())  # type: ignore[arg-type]
-        morse_ai.set_prompt("ok", version=[1])  # type: ignore[arg-type]
+    with amund.run("agent", record_keys={1: 2, None: None}, agent_version=object()):  # type: ignore[dict-item,arg-type]
+        amund.link_record(object(), object())  # type: ignore[arg-type]
+        amund.set_prompt(object(), object())  # type: ignore[arg-type]
+        amund.set_prompt("ok", version=[1])  # type: ignore[arg-type]
     assert _trace()["prompts"] == [{"name": "ok"}]

@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11, <4.0"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -16,6 +16,112 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/66/41/63526ffa542b7dbeb671ab2252fb38e26cd2dbc68c0775cdc5ba11af78a7/amqp-5.4.1.tar.gz", hash = "sha256:79a9c0ab70e71745667f127ff80666894a734c26236b6f33149c964b096f0b20", size = 132240, upload-time = "2026-10-05T14:03:23.415Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/28/8e/25f762f8cf0da76c7b1a66a9cadc291168537598c533954b0e2c9de3a0a3/amqp-5.4.1-py3-none-any.whl", hash = "sha256:ac2b816a14a380ed10c5ebbf85a334fd68111fa476496867a5ccd2fd09926d5e", size = 51858, upload-time = "2026-10-05T14:03:18.61Z" },
+]
+
+[[package]]
+name = "amund"
+version = "0.9.1rc1"
+source = { editable = "." }
+dependencies = [
+    { name = "httpx" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
+]
+
+[package.optional-dependencies]
+all = [
+    { name = "anthropic" },
+    { name = "claude-agent-sdk" },
+    { name = "google-genai" },
+    { name = "langchain-core" },
+    { name = "langgraph" },
+    { name = "openai" },
+    { name = "openai-agents" },
+    { name = "strands-agents" },
+]
+anthropic = [
+    { name = "anthropic" },
+]
+claude-agent-sdk = [
+    { name = "claude-agent-sdk" },
+]
+dev = [
+    { name = "boto3" },
+    { name = "celery" },
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-benchmark" },
+    { name = "respx" },
+    { name = "ruff" },
+]
+google-genai = [
+    { name = "google-genai" },
+]
+langchain = [
+    { name = "langchain-core" },
+]
+langgraph = [
+    { name = "langchain-core" },
+    { name = "langgraph" },
+]
+openai = [
+    { name = "openai" },
+]
+openai-agents = [
+    { name = "openai-agents" },
+]
+strands = [
+    { name = "strands-agents" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "respx" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anthropic", marker = "extra == 'all'", specifier = ">=0.40.0" },
+    { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.40.0" },
+    { name = "boto3", marker = "extra == 'dev'", specifier = ">=1.34" },
+    { name = "celery", marker = "extra == 'dev'", specifier = ">=5.3" },
+    { name = "claude-agent-sdk", marker = "extra == 'all'", specifier = ">=0.1.0" },
+    { name = "claude-agent-sdk", marker = "extra == 'claude-agent-sdk'", specifier = ">=0.1.0" },
+    { name = "google-genai", marker = "extra == 'all'", specifier = ">=1.0.0" },
+    { name = "google-genai", marker = "extra == 'google-genai'", specifier = ">=1.0.0" },
+    { name = "httpx", specifier = ">=0.25.0,<1.0" },
+    { name = "langchain-core", marker = "extra == 'all'", specifier = ">=1.0" },
+    { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=1.0" },
+    { name = "langchain-core", marker = "extra == 'langgraph'", specifier = ">=1.0" },
+    { name = "langgraph", marker = "extra == 'all'", specifier = ">=1.0" },
+    { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
+    { name = "openai", marker = "extra == 'all'", specifier = ">=1.50.0" },
+    { name = "openai", marker = "extra == 'openai'", specifier = ">=1.50.0" },
+    { name = "openai-agents", marker = "extra == 'all'", specifier = ">=0.15.0,<1.0" },
+    { name = "openai-agents", marker = "extra == 'openai-agents'", specifier = ">=0.15.0,<1.0" },
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.27.0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.27.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
+    { name = "pytest-benchmark", marker = "extra == 'dev'", specifier = ">=5.0" },
+    { name = "respx", marker = "extra == 'dev'", specifier = ">=0.22" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
+    { name = "strands-agents", marker = "extra == 'all'", specifier = ">=1.0.0" },
+    { name = "strands-agents", marker = "extra == 'strands'", specifier = ">=1.0.0" },
+]
+provides-extras = ["anthropic", "openai", "openai-agents", "langchain", "langgraph", "claude-agent-sdk", "strands", "google-genai", "all", "dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.19.1" },
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "respx", specifier = ">=0.22.0" },
+    { name = "ruff", specifier = ">=0.15.7" },
 ]
 
 [[package]]
@@ -933,112 +1039,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8b/eb/c0cfc62075dc6e1ec1c64d352ae09ac051d9334311ed226f1f425312848a/mcp-1.27.0.tar.gz", hash = "sha256:d3dc35a7eec0d458c1da4976a48f982097ddaab87e278c5511d5a4a56e852b83", size = 607509, upload-time = "2026-04-02T14:48:08.88Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9c/46/f6b4ad632c67ef35209a66127e4bddc95759649dd595f71f13fba11bdf9a/mcp-1.27.0-py3-none-any.whl", hash = "sha256:5ce1fa81614958e267b21fb2aa34e0aea8e2c6ede60d52aba45fd47246b4d741", size = 215967, upload-time = "2026-04-02T14:48:07.24Z" },
-]
-
-[[package]]
-name = "morse-ai"
-version = "0.9.1rc1"
-source = { editable = "." }
-dependencies = [
-    { name = "httpx" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
-    { name = "opentelemetry-sdk" },
-]
-
-[package.optional-dependencies]
-all = [
-    { name = "anthropic" },
-    { name = "claude-agent-sdk" },
-    { name = "google-genai" },
-    { name = "langchain-core" },
-    { name = "langgraph" },
-    { name = "openai" },
-    { name = "openai-agents" },
-    { name = "strands-agents" },
-]
-anthropic = [
-    { name = "anthropic" },
-]
-claude-agent-sdk = [
-    { name = "claude-agent-sdk" },
-]
-dev = [
-    { name = "boto3" },
-    { name = "celery" },
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-benchmark" },
-    { name = "respx" },
-    { name = "ruff" },
-]
-google-genai = [
-    { name = "google-genai" },
-]
-langchain = [
-    { name = "langchain-core" },
-]
-langgraph = [
-    { name = "langchain-core" },
-    { name = "langgraph" },
-]
-openai = [
-    { name = "openai" },
-]
-openai-agents = [
-    { name = "openai-agents" },
-]
-strands = [
-    { name = "strands-agents" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "respx" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "anthropic", marker = "extra == 'all'", specifier = ">=0.40.0" },
-    { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.40.0" },
-    { name = "boto3", marker = "extra == 'dev'", specifier = ">=1.34" },
-    { name = "celery", marker = "extra == 'dev'", specifier = ">=5.3" },
-    { name = "claude-agent-sdk", marker = "extra == 'all'", specifier = ">=0.1.0" },
-    { name = "claude-agent-sdk", marker = "extra == 'claude-agent-sdk'", specifier = ">=0.1.0" },
-    { name = "google-genai", marker = "extra == 'all'", specifier = ">=1.0.0" },
-    { name = "google-genai", marker = "extra == 'google-genai'", specifier = ">=1.0.0" },
-    { name = "httpx", specifier = ">=0.25.0,<1.0" },
-    { name = "langchain-core", marker = "extra == 'all'", specifier = ">=1.0" },
-    { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=1.0" },
-    { name = "langchain-core", marker = "extra == 'langgraph'", specifier = ">=1.0" },
-    { name = "langgraph", marker = "extra == 'all'", specifier = ">=1.0" },
-    { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
-    { name = "openai", marker = "extra == 'all'", specifier = ">=1.50.0" },
-    { name = "openai", marker = "extra == 'openai'", specifier = ">=1.50.0" },
-    { name = "openai-agents", marker = "extra == 'all'", specifier = ">=0.15.0,<1.0" },
-    { name = "openai-agents", marker = "extra == 'openai-agents'", specifier = ">=0.15.0,<1.0" },
-    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.27.0" },
-    { name = "opentelemetry-sdk", specifier = ">=1.27.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
-    { name = "pytest-benchmark", marker = "extra == 'dev'", specifier = ">=5.0" },
-    { name = "respx", marker = "extra == 'dev'", specifier = ">=0.22" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
-    { name = "strands-agents", marker = "extra == 'all'", specifier = ">=1.0.0" },
-    { name = "strands-agents", marker = "extra == 'strands'", specifier = ">=1.0.0" },
-]
-provides-extras = ["anthropic", "openai", "openai-agents", "langchain", "langgraph", "claude-agent-sdk", "strands", "google-genai", "all", "dev"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.19.1" },
-    { name = "pytest", specifier = ">=9.0.2" },
-    { name = "respx", specifier = ">=0.22.0" },
-    { name = "ruff", specifier = ">=0.15.7" },
 ]
 
 [[package]]

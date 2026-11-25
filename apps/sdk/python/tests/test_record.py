@@ -2,7 +2,7 @@
 
 from importlib.metadata import version
 
-from morse_ai.record import RunRecord
+from amund.record import RunRecord
 
 
 class TestRunRecord:
@@ -13,7 +13,7 @@ class TestRunRecord:
         # Asserted against the packaging metadata, not a literal: a hardcoded
         # version here would need hand-editing every release and would happily
         # pass while the shipped telemetry reported a stale version.
-        assert rec.sdk_version == version("morse-ai")
+        assert rec.sdk_version == version("amund")
         assert rec.run_id  # auto-generated
         assert rec.started_at  # auto-generated
 

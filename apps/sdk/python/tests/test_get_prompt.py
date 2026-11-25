@@ -12,15 +12,15 @@ import httpx
 import pytest
 import respx
 
-import morse_ai
-from morse_ai import (
+import amund
+from amund import (
     Prompt,
     PromptAccessError,
     PromptError,
     PromptNotFoundError,
     PromptRateLimitError,
 )
-from morse_ai import prompts as _prompts
+from amund import prompts as _prompts
 
 BASE = "https://api.morse.test"
 BODY = {
@@ -38,7 +38,7 @@ def _client(monkeypatch):
         endpoint=f"{BASE}/api/v1/traces/batch",
         _api_key="mk_test_fake",  # pragma: allowlist secret
     )
-    monkeypatch.setattr(morse_ai, "_client", fake)
+    monkeypatch.setattr(amund, "_client", fake)
     yield
 
 
@@ -48,7 +48,7 @@ def test_default_label_production_and_bearer_auth():
     route = respx.get(f"{BASE}/api/v1/prompts/triage").mock(
         return_value=httpx.Response(200, json=BODY, headers={"ETag": '"abc"'})
     )
-    p = morse_ai.get_prompt("triage")
+    p = amund.get_prompt("triage")
     req = route.calls.last.request
     assert dict(req.url.params) == {"label": "production"}
     assert req.headers["authorization"] == "Bearer mk_test_fake"
@@ -62,7 +62,7 @@ def test_label_selector():
     route = respx.get(f"{BASE}/api/v1/prompts/triage").mock(
         return_value=httpx.Response(200, json=BODY)
     )
-    morse_ai.get_prompt("triage", label="staging")
+    amund.get_prompt("triage", label="staging")
     assert dict(route.calls.last.request.url.params) == {"label": "staging"}
 
 
@@ -72,7 +72,7 @@ def test_version_selector_has_no_label():
     route = respx.get(f"{BASE}/api/v1/prompts/triage").mock(
         return_value=httpx.Response(200, json=BODY)
     )
-    morse_ai.get_prompt("triage", version=3)
+    amund.get_prompt("triage", version=3)
     assert dict(route.calls.last.request.url.params) == {"version": "3"}
 
 
@@ -81,7 +81,7 @@ def test_version_selector_has_no_label():
 def test_both_selectors_raise_before_any_request():
     route = respx.get(url__regex=r".*").mock(return_value=httpx.Response(200))
     with pytest.raises(ValueError):
-        morse_ai.get_prompt("triage", label="x", version=1)
+        amund.get_prompt("triage", label="x", version=1)
     assert route.call_count == 0
 
 
@@ -91,7 +91,7 @@ def test_name_is_url_encoded():
     route = respx.get(url__regex=r".*").mock(
         return_value=httpx.Response(200, json=BODY)
     )
-    morse_ai.get_prompt("team/triage v2?")
+    amund.get_prompt("team/triage v2?")
     assert route.calls.last.request.url.raw_path.startswith(
         b"/api/v1/prompts/team%2Ftriage%20v2%3F?"
     )
@@ -103,7 +103,7 @@ def test_if_none_match_sent_and_304_is_not_modified():
     route = respx.get(f"{BASE}/api/v1/prompts/triage").mock(
         return_value=httpx.Response(304, headers={"ETag": '"abc"'})
     )
-    p = morse_ai.get_prompt("triage", if_none_match='"abc"')
+    p = amund.get_prompt("triage", if_none_match='"abc"')
     assert route.calls.last.request.headers["if-none-match"] == '"abc"'
     assert p.not_modified is True
     assert p.etag == '"abc"'
@@ -118,7 +118,7 @@ def test_no_if_none_match_header_by_default():
     route = respx.get(f"{BASE}/api/v1/prompts/triage").mock(
         return_value=httpx.Response(200, json=BODY)
     )
-    morse_ai.get_prompt("triage")
+    amund.get_prompt("triage")
     assert "if-none-match" not in route.calls.last.request.headers
 
 
@@ -127,7 +127,7 @@ def test_no_if_none_match_header_by_default():
 def test_403_raises_access_error_naming_scope():
     respx.get(f"{BASE}/api/v1/prompts/triage").mock(return_value=httpx.Response(403))
     with pytest.raises(PromptAccessError, match="prompts:read"):
-        morse_ai.get_prompt("triage")
+        amund.get_prompt("triage")
 
 
 @pytest.mark.req("SPF-03")
@@ -135,7 +135,7 @@ def test_403_raises_access_error_naming_scope():
 def test_404_raises_not_found():
     respx.get(f"{BASE}/api/v1/prompts/nope").mock(return_value=httpx.Response(404))
     with pytest.raises(PromptNotFoundError):
-        morse_ai.get_prompt("nope")
+        amund.get_prompt("nope")
 
 
 @pytest.mark.req("SPF-03")
@@ -149,7 +149,7 @@ def test_429_raises_rate_limit_with_retry_after_and_no_retry():
         )
     )
     with pytest.raises(PromptRateLimitError) as exc:
-        morse_ai.get_prompt("triage")
+        amund.get_prompt("triage")
     assert exc.value.retry_after == 7
     assert route.call_count == 1
 
@@ -168,16 +168,16 @@ def test_network_error_propagates_as_httpx_transport_error_without_retry():
         side_effect=httpx.ConnectError("refused")
     )
     with pytest.raises(httpx.TransportError):
-        morse_ai.get_prompt("triage")
+        amund.get_prompt("triage")
     assert route.call_count == 1
 
 
 @pytest.mark.req("SPF-03")
 def test_not_initialized_raises_prompt_error(monkeypatch):
-    monkeypatch.setattr(morse_ai, "_client", None)
+    monkeypatch.setattr(amund, "_client", None)
     monkeypatch.delenv("MORSE_API_KEY", raising=False)
-    with pytest.raises(PromptError, match="MORSE_API_KEY"):
-        morse_ai.get_prompt("triage")
+    with pytest.raises(PromptError, match="AMUND_API_KEY"):
+        amund.get_prompt("triage")
 
 
 # --- Optional cache (SPF-04..06) ---------------------------------------------
@@ -195,11 +195,11 @@ class _Clock:
 def clock(monkeypatch):
     c = _Clock()
     monkeypatch.setattr(_prompts, "_clock", c)
-    morse_ai.clear_prompt_cache()
-    morse_ai.configure_prompt_cache(256)
+    amund.clear_prompt_cache()
+    amund.configure_prompt_cache(256)
     yield c
-    morse_ai.clear_prompt_cache()
-    morse_ai.configure_prompt_cache(256)
+    amund.clear_prompt_cache()
+    amund.configure_prompt_cache(256)
 
 
 def _route():
@@ -210,9 +210,9 @@ def _route():
 @respx.mock
 def test_cache_off_by_default(clock):
     route = _route().mock(return_value=httpx.Response(200, json=BODY))
-    morse_ai.get_prompt("triage")
-    morse_ai.get_prompt("triage")
-    morse_ai.get_prompt("triage", cache_ttl=0)
+    amund.get_prompt("triage")
+    amund.get_prompt("triage")
+    amund.get_prompt("triage", cache_ttl=0)
     assert route.call_count == 3
     assert len(_prompts._cache) == 0
 
@@ -221,9 +221,9 @@ def test_cache_off_by_default(clock):
 @respx.mock
 def test_cache_hit_within_ttl(clock):
     route = _route().mock(return_value=httpx.Response(200, json=BODY))
-    a = morse_ai.get_prompt("triage", cache_ttl=60)
+    a = amund.get_prompt("triage", cache_ttl=60)
     clock.t += 1
-    b = morse_ai.get_prompt("triage", cache_ttl=60)
+    b = amund.get_prompt("triage", cache_ttl=60)
     assert route.call_count == 1
     assert a == b
 
@@ -232,7 +232,7 @@ def test_cache_hit_within_ttl(clock):
 @respx.mock
 def test_caller_if_none_match_bypasses_cache(clock):
     route = _route().mock(return_value=httpx.Response(304, headers={"ETag": '"abc"'}))
-    p = morse_ai.get_prompt("triage", if_none_match='"abc"', cache_ttl=60)
+    p = amund.get_prompt("triage", if_none_match='"abc"', cache_ttl=60)
     assert p.not_modified is True
     assert len(_prompts._cache) == 0
     assert route.call_count == 1
@@ -247,13 +247,13 @@ def test_stale_304_revalidates_and_refreshes(clock):
             httpx.Response(304, headers={"ETag": '"abc"'}),
         ]
     )
-    first = morse_ai.get_prompt("triage", cache_ttl=60)
+    first = amund.get_prompt("triage", cache_ttl=60)
     clock.t += 61
-    second = morse_ai.get_prompt("triage", cache_ttl=60)
+    second = amund.get_prompt("triage", cache_ttl=60)
     assert route.calls.last.request.headers["if-none-match"] == '"abc"'
     assert second == first and second.not_modified is False
     clock.t += 30  # fresh again because the 304 refreshed the timestamp
-    morse_ai.get_prompt("triage", cache_ttl=60)
+    amund.get_prompt("triage", cache_ttl=60)
     assert route.call_count == 2
 
 
@@ -264,10 +264,10 @@ def test_stale_200_replaces_entry(clock):
     route = _route().mock(
         side_effect=[httpx.Response(200, json=BODY), httpx.Response(200, json=new)]
     )
-    morse_ai.get_prompt("triage", cache_ttl=60)
+    amund.get_prompt("triage", cache_ttl=60)
     clock.t += 61
-    assert morse_ai.get_prompt("triage", cache_ttl=60).version == 4
-    assert morse_ai.get_prompt("triage", cache_ttl=60).version == 4
+    assert amund.get_prompt("triage", cache_ttl=60).version == 4
+    assert amund.get_prompt("triage", cache_ttl=60).version == 4
     assert route.call_count == 2
 
 
@@ -278,27 +278,27 @@ def test_stale_200_replaces_entry(clock):
 @respx.mock
 def test_stale_entry_never_masks_errors(clock, status, exc):
     _route().mock(side_effect=[httpx.Response(200, json=BODY), httpx.Response(status)])
-    morse_ai.get_prompt("triage", cache_ttl=60)
+    amund.get_prompt("triage", cache_ttl=60)
     clock.t += 61
     with pytest.raises(exc):
-        morse_ai.get_prompt("triage", cache_ttl=60)
+        amund.get_prompt("triage", cache_ttl=60)
 
 
 @pytest.mark.req("SPF-06")
 @respx.mock
 def test_lru_eviction_at_max_entries(clock):
-    morse_ai.configure_prompt_cache(max_entries=2)
+    amund.configure_prompt_cache(max_entries=2)
     route = respx.get(url__regex=rf"{BASE}/api/v1/prompts/.*").mock(
         return_value=httpx.Response(200, json=BODY)
     )
-    morse_ai.get_prompt("a", cache_ttl=60)
-    morse_ai.get_prompt("b", cache_ttl=60)
-    morse_ai.get_prompt("a", cache_ttl=60)  # a is now most recent
-    morse_ai.get_prompt("c", cache_ttl=60)  # evicts b
+    amund.get_prompt("a", cache_ttl=60)
+    amund.get_prompt("b", cache_ttl=60)
+    amund.get_prompt("a", cache_ttl=60)  # a is now most recent
+    amund.get_prompt("c", cache_ttl=60)  # evicts b
     assert route.call_count == 3
-    morse_ai.get_prompt("a", cache_ttl=60)
+    amund.get_prompt("a", cache_ttl=60)
     assert route.call_count == 3
-    morse_ai.get_prompt("b", cache_ttl=60)
+    amund.get_prompt("b", cache_ttl=60)
     assert route.call_count == 4
 
 
@@ -306,9 +306,9 @@ def test_lru_eviction_at_max_entries(clock):
 @respx.mock
 def test_clear_prompt_cache(clock):
     route = _route().mock(return_value=httpx.Response(200, json=BODY))
-    morse_ai.get_prompt("triage", cache_ttl=60)
-    morse_ai.clear_prompt_cache()
-    morse_ai.get_prompt("triage", cache_ttl=60)
+    amund.get_prompt("triage", cache_ttl=60)
+    amund.clear_prompt_cache()
+    amund.get_prompt("triage", cache_ttl=60)
     assert route.call_count == 2
 
 
@@ -316,11 +316,11 @@ def test_clear_prompt_cache(clock):
 @respx.mock
 def test_different_api_keys_do_not_share_entries(clock, monkeypatch):
     route = _route().mock(return_value=httpx.Response(200, json=BODY))
-    morse_ai.get_prompt("triage", cache_ttl=60)
+    amund.get_prompt("triage", cache_ttl=60)
     monkeypatch.setattr(
-        morse_ai._client, "_api_key", "mk_test_other"
+        amund._client, "_api_key", "mk_test_other"
     )  # pragma: allowlist secret
-    morse_ai.get_prompt("triage", cache_ttl=60)
+    amund.get_prompt("triage", cache_ttl=60)
     assert route.call_count == 2
 
 
@@ -328,23 +328,23 @@ def test_different_api_keys_do_not_share_entries(clock, monkeypatch):
 @respx.mock
 def test_label_and_version_are_separate_entries(clock):
     route = _route().mock(return_value=httpx.Response(200, json=BODY))
-    morse_ai.get_prompt("triage", cache_ttl=60)
-    morse_ai.get_prompt("triage", version=3, cache_ttl=60)
+    amund.get_prompt("triage", cache_ttl=60)
+    amund.get_prompt("triage", version=3, cache_ttl=60)
     assert route.call_count == 2
 
 
 @pytest.mark.req("SPF-06")
 @respx.mock
 def test_cache_thread_safety_smoke(clock):
-    morse_ai.configure_prompt_cache(max_entries=4)
+    amund.configure_prompt_cache(max_entries=4)
     _route().mock(return_value=httpx.Response(200, json=BODY))
     errors: list[BaseException] = []
 
     def work() -> None:
         try:
             for _ in range(50):
-                morse_ai.get_prompt("triage", cache_ttl=60)
-                morse_ai.clear_prompt_cache()
+                amund.get_prompt("triage", cache_ttl=60)
+                amund.clear_prompt_cache()
         except BaseException as e:  # noqa: BLE001
             errors.append(e)
 

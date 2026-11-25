@@ -19,10 +19,10 @@ from typing import Annotated, Any, TypedDict
 
 import pytest
 
-from morse_ai import tracing
-from morse_ai._internal.redaction import RedactionConfig
-from morse_ai.adapters.langgraph import LangGraphCallbackHandler
-from morse_ai.otel_provider import get_engine
+from amund import tracing
+from amund._internal.redaction import RedactionConfig
+from amund.adapters.langgraph import LangGraphCallbackHandler
+from amund.otel_provider import get_engine
 
 pytest.importorskip("langgraph")
 pytest.importorskip("langchain_core")
@@ -417,7 +417,7 @@ def _start_trace(name):
 @pytest.mark.req("AID-05")
 def test_openai_agents_handoff_target_is_a_sub_agent_of_the_agent_that_handed_off():
     pytest.importorskip("agents")
-    from morse_ai.adapters import openai_agents as adapter
+    from amund.adapters import openai_agents as adapter
 
     r, state, root = _start_trace("triage")
     try:
@@ -438,7 +438,7 @@ def test_openai_agents_handoff_target_is_a_sub_agent_of_the_agent_that_handed_of
 @pytest.mark.req("AID-04")
 def test_openai_agents_run_around_the_app_keeps_the_starting_agent_as_root():
     pytest.importorskip("agents")
-    from morse_ai.adapters import openai_agents as adapter
+    from amund.adapters import openai_agents as adapter
 
     with tracing.run("airline-support"):
         state = tracing.get_active_trace()

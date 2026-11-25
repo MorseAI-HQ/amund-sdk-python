@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import pytest
 
-import morse_ai
-from morse_ai import tracing as _tracing
-from morse_ai._internal.active_framework import (
+import amund
+from amund import tracing as _tracing
+from amund._internal.active_framework import (
     clear_active_framework,
     get_active_framework,
     set_active_framework,
@@ -29,17 +29,17 @@ from morse_ai._internal.active_framework import (
 
 
 def setup_function() -> None:
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
     clear_active_framework()
 
 
 def teardown_function() -> None:
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
     clear_active_framework()
 
 
 def _emit_one_trace() -> dict:
-    with morse_ai.run("framework-test-agent") as r:
+    with amund.run("framework-test-agent") as r:
         r.set_outcome(success=True)
     payload = _tracing._get_last_trace()
     assert payload is not None
@@ -93,8 +93,8 @@ class _FakeAnthropicClient:
 @pytest.mark.req("FW-DETECT-02")
 def test_anthropic_wrap_tags_framework_attr(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MORSE_API_KEY", "av_test")
-    morse_ai._ensure_initialized()
-    from morse_ai.adapters import anthropic as av_anthropic
+    amund._ensure_initialized()
+    from amund.adapters import anthropic as av_anthropic
 
     # AGE-240 fix: ``wrap()`` is a no-op when ``install()`` already
     # monkey-patched the real anthropic module globally (which auto-detect
@@ -108,7 +108,7 @@ def test_anthropic_wrap_tags_framework_attr(monkeypatch: pytest.MonkeyPatch) -> 
         pass
 
     client = av_anthropic.wrap(_FakeAnthropicClient())
-    with morse_ai.run("dogfood-test"):
+    with amund.run("dogfood-test"):
         client.messages.create(model="claude-haiku-4-5", messages=[])
 
     payload = _tracing._get_last_trace()
@@ -132,11 +132,11 @@ def test_anthropic_wrap_no_double_record_when_install_active(
     ``wrap()`` explicitly.
     """
     monkeypatch.setenv("MORSE_API_KEY", "av_test")
-    morse_ai._ensure_initialized()
+    amund._ensure_initialized()
     # Simulate ``install()`` having run by setting the module marker.
     import sys
 
-    from morse_ai.adapters import anthropic as av_anthropic
+    from amund.adapters import anthropic as av_anthropic
 
     fake_anthropic = type(sys)("anthropic")
     fake_anthropic._morse_ai_installed = True
@@ -163,7 +163,7 @@ def test_openai_agents_set_framework_marker(monkeypatch: pytest.MonkeyPatch) -> 
     confirm the same constant ("openai-agents") that's read by
     TracedRun.__enter__ is what the adapter uses.
     """
-    from morse_ai.adapters import openai_agents as av_oai
+    from amund.adapters import openai_agents as av_oai
 
     assert av_oai._FRAMEWORK_NAME == "openai-agents"
     set_active_framework(av_oai._FRAMEWORK_NAME)
@@ -182,10 +182,10 @@ def test_openai_agents_set_framework_marker(monkeypatch: pytest.MonkeyPatch) -> 
 @pytest.mark.req("FW-DETECT-04")
 def test_langchain_handler_sets_framework_marker() -> None:
     """on_chain_start sets the framework; on_chain_end clears."""
-    from morse_ai.adapters.langchain import MorseCallbackHandler
+    from amund.adapters.langchain import MorseCallbackHandler
 
     handler = MorseCallbackHandler(agent_name="lc-test")
-    with morse_ai.run("lc-trace") as r:
+    with amund.run("lc-trace") as r:
         from uuid import uuid4
 
         rid = uuid4()
@@ -198,12 +198,12 @@ def test_langchain_handler_sets_framework_marker() -> None:
 
 @pytest.mark.req("FW-DETECT-04")
 def test_langgraph_handler_overrides_to_langgraph() -> None:
-    from morse_ai.adapters.langgraph import LangGraphCallbackHandler
+    from amund.adapters.langgraph import LangGraphCallbackHandler
 
     handler = LangGraphCallbackHandler(agent_name="lg-test")
     assert handler._framework_name == "langgraph"
 
-    with morse_ai.run("lg-trace") as r:
+    with amund.run("lg-trace") as r:
         from uuid import uuid4
 
         rid = uuid4()
@@ -228,7 +228,7 @@ def test_langgraph_handler_overrides_to_langgraph() -> None:
 @pytest.mark.req("FW-DETECT-04")
 def test_langchain_chain_inside_trace_emits_framework_resource() -> None:
     """Chain spans covering the whole trace → emitted trace carries framework attr."""
-    from morse_ai.adapters.langchain import MorseCallbackHandler
+    from amund.adapters.langchain import MorseCallbackHandler
 
     handler = MorseCallbackHandler(agent_name="lc-test")
     from uuid import uuid4
@@ -236,7 +236,7 @@ def test_langchain_chain_inside_trace_emits_framework_resource() -> None:
     rid = uuid4()
     # Mid-trace: open chain BEFORE entering the run, so framework is captured at enter.
     set_active_framework("langchain")
-    with morse_ai.run("lc-trace") as r:
+    with amund.run("lc-trace") as r:
         handler.on_chain_start({"id": ["my-chain"]}, {}, run_id=rid)
         handler.on_chain_end({}, run_id=rid)
         r.set_outcome(success=True)
@@ -254,7 +254,7 @@ def test_langchain_chain_inside_trace_emits_framework_resource() -> None:
 
 @pytest.mark.req("FW-DETECT-05")
 def test_no_adapter_omits_framework_attr() -> None:
-    """A pure ``with morse_ai.run(...)`` with no LLM call gets NO framework attr."""
+    """A pure ``with amund.run(...)`` with no LLM call gets NO framework attr."""
     payload = _emit_one_trace()
     assert "resource" not in payload or "morse_ai.framework" not in payload.get(
         "resource", {}
@@ -271,7 +271,7 @@ def test_framework_and_source_coexist() -> None:
     """Both resource attrs end up in the same ``resource`` dict on the wire."""
     set_active_framework("anthropic")
     try:
-        with morse_ai.run("dogfood-agent", source="investigator") as r:
+        with amund.run("dogfood-agent", source="investigator") as r:
             r.set_outcome(success=True)
     finally:
         clear_active_framework()

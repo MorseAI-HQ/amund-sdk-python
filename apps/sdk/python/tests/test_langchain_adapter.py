@@ -11,8 +11,8 @@ import uuid
 
 import pytest
 
-from morse_ai import tracing
-from morse_ai.adapters.langchain import MorseCallbackHandler
+from amund import tracing
+from amund.adapters.langchain import MorseCallbackHandler
 
 # ---------------------------------------------------------------------------
 # Mock helpers
@@ -621,7 +621,7 @@ def test_retriever_chain_nests_retriever_under_the_chain():
 
 @pytest.mark.req("MHQ-1412")
 def test_framework_is_set_by_llm_callbacks_without_any_chain():
-    from morse_ai._internal.active_framework import get_active_framework
+    from amund._internal.active_framework import get_active_framework
 
     handler = MorseCallbackHandler("llm-only")
     run_id = uuid.uuid4()

@@ -1,6 +1,6 @@
 """LangGraph adapter: async zero-config tracing, LLM de-duplication, control flow.
 
-MHQ-1402: ``asyncio.run(graph.ainvoke(...))`` without ``morse_ai.run()`` stored
+MHQ-1402: ``asyncio.run(graph.ainvoke(...))`` without ``amund.run()`` stored
 only 2 spans. LangChain runs a *sync* handler's callbacks from an async path in
 an executor with a *copied* context, so the ContextVar the auto-trace sets in
 ``on_chain_start`` was invisible to every later callback. The handler now
@@ -36,10 +36,10 @@ from langchain_core.outputs import ChatGeneration, ChatResult  # noqa: E402
 from langchain_core.tools import tool  # noqa: E402
 from langgraph.graph import END, START, StateGraph  # noqa: E402
 
-from morse_ai import tracing  # noqa: E402
-from morse_ai.adapters import langgraph as lga  # noqa: E402
-from morse_ai.adapters.langchain import MorseCallbackHandler  # noqa: E402
-from morse_ai.adapters.langgraph import LangGraphCallbackHandler  # noqa: E402
+from amund import tracing  # noqa: E402
+from amund.adapters import langgraph as lga  # noqa: E402
+from amund.adapters.langchain import MorseCallbackHandler  # noqa: E402
+from amund.adapters.langgraph import LangGraphCallbackHandler  # noqa: E402
 
 
 class _FakeChat(BaseChatModel):

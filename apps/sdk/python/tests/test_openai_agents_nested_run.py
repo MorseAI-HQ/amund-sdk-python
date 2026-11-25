@@ -1,9 +1,9 @@
-"""MHQ-1154 — OpenAI Agents spans must survive `with morse_ai.run(...)` nesting.
+"""MHQ-1154 — OpenAI Agents spans must survive `with amund.run(...)` nesting.
 
-Adapter: `apps/sdk/python/src/morse_ai/adapters/openai_agents.py`
-Root cause: `apps/sdk/python/src/morse_ai/_internal/auto_detect.py`
+Adapter: `apps/sdk/python/src/amund/adapters/openai_agents.py`
+Root cause: `apps/sdk/python/src/amund/_internal/auto_detect.py`
 
-The reported driver called ``morse_ai.init()`` BEFORE ``from agents import
+The reported driver called ``amund.init()`` BEFORE ``from agents import
 Runner``. That path relies on the lazy import hook, which installed the adapter
 from a background thread that only got to patch ``Runner`` after the import
 statement returned — so the very next ``Runner.run_sync`` ran unpatched and
@@ -32,15 +32,15 @@ pytest.importorskip("agents", reason="openai-agents not installed")
 _PRELUDE = textwrap.dedent(
     """
     import asyncio, json
-    from morse_ai._internal import auto_detect
-    from morse_ai import tracing
-    import morse_ai
+    from amund._internal import auto_detect
+    from amund import tracing
+    import amund
     from openai.types.responses import (
         ResponseFunctionToolCall, ResponseOutputMessage, ResponseOutputText,
     )
 
     if IMPORT_ORDER == "init_first":
-        auto_detect.install_adapters()  # what morse_ai.init() does
+        auto_detect.install_adapters()  # what amund.init() does
 
     # One import statement, then straight to work -- the shape of the
     # reported driver. Anything slow in between hides the race.
@@ -88,13 +88,13 @@ _PRELUDE = textwrap.dedent(
 
 _SCENARIOS = {
     "run_sync_nested": """
-with morse_ai.run("agent-x") as r:
+with amund.run("agent-x") as r:
     Runner.run_sync(agent, "2+3?")
     r.set_outcome(True, "ok")
 """,
     "run_async_nested": """
 async def main():
-    with morse_ai.run("agent-x") as r:
+    with amund.run("agent-x") as r:
         await Runner.run(agent, "2+3?")
         r.set_outcome(True, "ok")
 asyncio.run(main())

@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
-from morse_ai import tracing
-from morse_ai.adapters.langgraph import (
+from amund import tracing
+from amund.adapters.langgraph import (
     _SEGMENT_CONTENT_MAX_BYTES,
     LangGraphCallbackHandler,
 )
@@ -321,7 +321,7 @@ def test_callbacks_swallow_errors(monkeypatch):
     handler = LangGraphCallbackHandler("test-agent")
     rid = uuid.uuid4()
 
-    import morse_ai.tracing as tracing_module
+    import amund.tracing as tracing_module
 
     class Boom:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -345,9 +345,9 @@ def test_callbacks_swallow_errors(monkeypatch):
 @pytest.mark.req("CTX-09")
 def test_langgraph_memory_scope_on_extract(monkeypatch):
     """Checkpointer/store extract spans carry memory_scope='working'."""
-    import morse_ai.adapters.langgraph as _lg
-    import morse_ai.tracing as _t
-    from morse_ai.tracing import _active_trace, _TraceState
+    import amund.adapters.langgraph as _lg
+    import amund.tracing as _t
+    from amund.tracing import _active_trace, _TraceState
 
     captured = []
     orig = _t._finalize_span
@@ -381,9 +381,9 @@ def test_langgraph_memory_scope_on_extract(monkeypatch):
 @pytest.mark.req("CTX-09")
 def test_langgraph_memory_scope_on_store_search(monkeypatch):
     """Store search spans carry memory_scope='retrieval'."""
-    import morse_ai.adapters.langgraph as _lg
-    import morse_ai.tracing as _t
-    from morse_ai.tracing import _active_trace, _TraceState
+    import amund.adapters.langgraph as _lg
+    import amund.tracing as _t
+    from amund.tracing import _active_trace, _TraceState
 
     captured = []
     orig = _t._finalize_span
@@ -417,9 +417,9 @@ def test_langgraph_memory_scope_on_store_search(monkeypatch):
 @pytest.mark.req("CTX-09")
 def test_langgraph_memory_scope_on_consolidate(monkeypatch):
     """Consolidate spans carry memory_scope='agent'."""
-    import morse_ai.adapters.langgraph as _lg
-    import morse_ai.tracing as _t
-    from morse_ai.tracing import _active_trace, _TraceState
+    import amund.adapters.langgraph as _lg
+    import amund.tracing as _t
+    from amund.tracing import _active_trace, _TraceState
 
     captured = []
     orig = _t._finalize_span

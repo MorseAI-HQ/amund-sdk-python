@@ -1,11 +1,11 @@
 """Phase 6c Wave 2 — auto-detection layer tests.
 
 Verifies:
-- morse_ai.init() triggers install_adapters()
+- amund.init() triggers install_adapters()
 - Anthropic adapter install/uninstall is idempotent
 - LangGraph wins over generic LangChain when both importable
 - MORSE_DISABLE_AUTO_DETECT=1 short-circuits the scan
-- Lazy import hook fires when target SDK imported AFTER morse_ai.init()
+- Lazy import hook fires when target SDK imported AFTER amund.init()
 - Adapter install failures don't propagate (non-invasive)
 """
 
@@ -16,17 +16,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import morse_ai
-from morse_ai._internal import auto_detect
-from morse_ai.adapters import anthropic as anthropic_adapter
+import amund
+from amund._internal import auto_detect
+from amund.adapters import anthropic as anthropic_adapter
 
 
 def setup_function() -> None:
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
 
 
 def teardown_function() -> None:
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
 
 
 # ---------------------------------------------------------------------------
@@ -35,18 +35,18 @@ def teardown_function() -> None:
 
 
 def test_init_calls_install_adapters() -> None:
-    """morse_ai.init() should call auto_detect.install_adapters() once."""
-    with patch("morse_ai.auto_detect.install_adapters") as mock_install:
-        morse_ai.init(api_key="av_test")
+    """amund.init() should call auto_detect.install_adapters() once."""
+    with patch("amund.auto_detect.install_adapters") as mock_install:
+        amund.init(api_key="av_test")
         mock_install.assert_called_once()
 
 
 def test_env_auto_init_calls_install_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
     """Env-based auto-init triggers install_adapters() too."""
     monkeypatch.setenv("MORSE_API_KEY", "av_env_test")
-    with patch("morse_ai.auto_detect.install_adapters") as mock_install:
+    with patch("amund.auto_detect.install_adapters") as mock_install:
         # First public call triggers env-based auto-init
-        morse_ai.track(agent_id="a", run_data={})
+        amund.track(agent_id="a", run_data={})
         mock_install.assert_called_once()
 
 
@@ -111,7 +111,7 @@ def test_langgraph_wins_over_langchain_when_both_present() -> None:
     """When langgraph is importable, the auto-detect targets include it."""
     fake_spec = MagicMock()
     with patch(
-        "morse_ai._internal.auto_detect.importlib.util.find_spec",
+        "amund._internal.auto_detect.importlib.util.find_spec",
         return_value=fake_spec,
     ):
         targets = auto_detect._adapter_targets()
@@ -124,7 +124,7 @@ def test_langgraph_wins_over_langchain_when_both_present() -> None:
 def test_no_langgraph_means_no_langgraph_target() -> None:
     """When langgraph is unavailable, it's not in the target list."""
     with patch(
-        "morse_ai._internal.auto_detect.importlib.util.find_spec",
+        "amund._internal.auto_detect.importlib.util.find_spec",
         return_value=None,
     ):
         targets = auto_detect._adapter_targets()
@@ -157,7 +157,7 @@ def test_lazy_finder_registered_when_target_not_imported() -> None:
     # Force a state where a target is "not imported" by removing if present
     # and stubbing find_spec to claim no langgraph.
     with patch(
-        "morse_ai._internal.auto_detect.importlib.util.find_spec",
+        "amund._internal.auto_detect.importlib.util.find_spec",
         return_value=None,
     ):
         # Remove anthropic from sys.modules temporarily to simulate "not imported"

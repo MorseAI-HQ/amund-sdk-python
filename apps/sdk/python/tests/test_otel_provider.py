@@ -14,8 +14,8 @@ import uuid
 
 import pytest
 
-from morse_ai._internal.redaction import RedactionConfig
-from morse_ai.otel_provider import (
+from amund._internal.redaction import RedactionConfig
+from amund.otel_provider import (
     TRUNCATION_MARKER,
     cap_bytes,
     emit_trace_entry,
@@ -332,7 +332,7 @@ class TestForkSafety:
 def test_spans_carry_the_sdk_version_on_the_instrumentation_scope(engine):
     """The server stamps traces.sdk_version from the scope version on the OTLP
     path; with none, every trace read ``otlp/http`` (rc2 acceptance)."""
-    from morse_ai._version import __version__
+    from amund._version import __version__
 
     trace_id = uuid.uuid4().hex
     emit_trace_entry(_fresh_entry(trace_id))
@@ -390,7 +390,7 @@ def test_children_ending_before_their_parent_keep_their_parent_link(engine):
 
 @pytest.mark.req("MHQ-1412")
 def test_parents_first_orders_parents_ahead_and_survives_cycles():
-    from morse_ai.otel_provider import _parents_first
+    from amund.otel_provider import _parents_first
 
     a = {"span_id": "a", "parent_span_id": "b"}
     b = {"span_id": "b", "parent_span_id": "a"}  # cycle

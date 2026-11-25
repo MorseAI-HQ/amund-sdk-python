@@ -25,8 +25,8 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.trace import SpanContext, TraceFlags
 
-from morse_ai import otel_provider
-from morse_ai._internal import diagnostics
+from amund import otel_provider
+from amund._internal import diagnostics
 
 
 @pytest.fixture(autouse=True)

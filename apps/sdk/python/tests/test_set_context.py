@@ -1,6 +1,6 @@
 """Tests for set_context() and user_metadata propagation (AGE-320 Wave B)."""
 
-from morse_ai.tracing import _active_trace, _TraceState, set_context
+from amund.tracing import _active_trace, _TraceState, set_context
 
 
 def test_set_context_noop_outside_trace():
@@ -41,14 +41,14 @@ def test_set_context_merges_with_existing():
 
 def test_user_metadata_emitted_in_trace_payload():
     """user_metadata set via set_context() appears in the emitted trace dict."""
-    import morse_ai
-    from morse_ai import tracing
+    import amund
+    from amund import tracing
 
     # Capture via _last_trace (no transport needed)
     tracing._transport = None
     tracing._last_trace = None
 
-    with morse_ai.run("test-agent"):
+    with amund.run("test-agent"):
         set_context(customer_id="acme", feature="doc-qa")
 
     payload = tracing._get_last_trace()
@@ -61,15 +61,13 @@ def test_user_metadata_emitted_in_trace_payload():
 
 def test_user_metadata_via_run_kwarg():
     """user_metadata passed directly to run() appears in the emitted trace dict."""
-    import morse_ai
-    from morse_ai import tracing
+    import amund
+    from amund import tracing
 
     tracing._transport = None
     tracing._last_trace = None
 
-    with morse_ai.run(
-        "test-agent", user_metadata={"customer_id": "beta", "env": "prod"}
-    ):
+    with amund.run("test-agent", user_metadata={"customer_id": "beta", "env": "prod"}):
         pass
 
     payload = tracing._get_last_trace()
@@ -78,8 +76,8 @@ def test_user_metadata_via_run_kwarg():
 
 
 def test_set_context_exported_from_package():
-    """set_context is accessible as morse_ai.set_context."""
-    import morse_ai
+    """set_context is accessible as amund.set_context."""
+    import amund
 
-    assert callable(morse_ai.set_context)
-    assert "set_context" in dir(morse_ai)
+    assert callable(amund.set_context)
+    assert "set_context" in dir(amund)

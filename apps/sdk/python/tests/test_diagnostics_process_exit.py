@@ -17,7 +17,7 @@ transmit; the header can only ever *change* the level, never enable it.
 thread on a 5-second flush interval. `drain_for_shutdown()` exists precisely so
 a shorter-lived process does not die with its buffer unsent (MHQ-946, and
 MHQ-927 for the TypeScript half) — but it is reachable only from
-`morse_ai.shutdown()`, and nothing registers that with `atexit`.
+`amund.shutdown()`, and nothing registers that with `atexit`.
 `transport.py` and `otel_provider.py` each register their own shutdown, so
 traces flush at exit while diagnostics do not. The SDK's whole setup story is
 zero-code-change, so customer code never calls `shutdown()` either.
@@ -43,14 +43,14 @@ _SRC = str(Path(__file__).parent.parent / "src")
 
 # Records a drop, then exits immediately — the shape of every CLI, script,
 # serverless invocation and short-lived Celery task, and of the OSS test run
-# that filed this ticket. Deliberately never calls morse_ai.shutdown().
+# that filed this ticket. Deliberately never calls amund.shutdown().
 _CHILD = """
 import sys
 sys.path.insert(0, {src!r})
-import morse_ai
-from morse_ai._internal import diagnostics
+import amund
+from amund._internal import diagnostics
 
-morse_ai.init(api_key="test-key", endpoint={endpoint!r})  # pragma: allowlist secret
+amund.init(api_key="test-key", endpoint={endpoint!r})  # pragma: allowlist secret
 # The exact call the OTLP exporter makes when a batch is permanently lost.
 diagnostics.record_drop(diagnostics.REASON_SEND_FAILED, "span", 2)
 {extra}
@@ -134,10 +134,10 @@ def test_a_drop_reaches_the_server_when_the_process_merely_exits():
 
 @pytest.mark.req("SDKDIAG-09")
 def test_an_explicit_shutdown_still_works():
-    """`morse_ai.shutdown()` was always the supported path; the atexit hook must
+    """`amund.shutdown()` was always the supported path; the atexit hook must
     not break it, and must not double-send when both run."""
     with _Collector() as collector:
-        result = _run_child(collector.endpoint, extra="morse_ai.shutdown()")
+        result = _run_child(collector.endpoint, extra="amund.shutdown()")
 
         assert result.returncode == 0, result.stderr
 
@@ -157,9 +157,9 @@ def test_a_healthy_process_transmits_nothing_at_exit():
         script = f"""
 import sys
 sys.path.insert(0, {_SRC!r})
-import morse_ai
+import amund
 _ep = {collector.endpoint!r}
-morse_ai.init(api_key="test-key", endpoint=_ep)  # pragma: allowlist secret
+amund.init(api_key="test-key", endpoint=_ep)  # pragma: allowlist secret
 """
         result = subprocess.run(
             [sys.executable, "-c", script],
@@ -210,11 +210,11 @@ def test_the_env_var_auto_init_path_also_drains_at_exit():
         script = f"""
 import sys
 sys.path.insert(0, {_SRC!r})
-import morse_ai
-from morse_ai._internal import diagnostics
+import amund
+from amund._internal import diagnostics
 
 # No init() call anywhere — first use auto-initialises from the env.
-with morse_ai.run("agent"):
+with amund.run("agent"):
     pass
 diagnostics.record_drop(diagnostics.REASON_SEND_FAILED, "span", 2)
 """
@@ -286,11 +286,11 @@ def test_a_drop_recorded_during_the_exporters_own_exit_flush_is_still_reported()
         script = f"""
 import sys
 sys.path.insert(0, {_SRC!r})
-import morse_ai
+import amund
 
 # No explicit drop and no shutdown() — the only failure is the trace export,
 # and it happens while the process is already on its way out.
-with morse_ai.run("agent"):
+with amund.run("agent"):
     pass
 """
         env = {

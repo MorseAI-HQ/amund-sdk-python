@@ -10,7 +10,7 @@ import threading
 
 import pytest
 
-from morse_ai._internal import diagnostics
+from amund._internal import diagnostics
 
 
 @pytest.fixture(autouse=True)
@@ -22,7 +22,7 @@ def _reset():
 
 def _raise_inside_sdk() -> BaseException:
     """Produce an exception whose traceback runs host → SDK → host → SDK."""
-    from morse_ai import tracing
+    from amund import tracing
 
     try:
         tracing._report  # noqa: B018 — ensure the module is imported
@@ -39,7 +39,7 @@ def test_healthy_process_creates_no_diagnostics_thread():
     """Option B's whole justification: the sender is lazily built, so a process
     that never errors pays nothing — no thread, no socket, no queue."""
     before = {t.name for t in threading.enumerate()}
-    assert not any(name.startswith("morse_ai-diagnostics") for name in before)
+    assert not any(name.startswith("amund-diagnostics") for name in before)
     assert diagnostics._sender is None
 
 
@@ -224,7 +224,7 @@ def test_drain_is_destructive():
 @pytest.mark.req("SDKDIAG-09")
 def test_queue_full_is_counted():
     """The drop site that previously produced only a local WARNING."""
-    from morse_ai.queue import TelemetryQueue
+    from amund.queue import TelemetryQueue
 
     q = TelemetryQueue(max_size=1)
     assert q.put({"a": 1}) is True
@@ -241,7 +241,7 @@ def test_queue_full_is_counted():
 def test_opted_out_customer_still_sees_errors_locally(monkeypatch, caplog):
     monkeypatch.setenv("MORSE_SDK_DISABLE_TELEMETRY", "1")
 
-    with caplog.at_level(logging.WARNING, logger="morse_ai._internal"):
+    with caplog.at_level(logging.WARNING, logger="amund._internal"):
         diagnostics.report(ValueError("boom"), fingerprint="test.optout")
 
     assert any("test.optout" in r.getMessage() for r in caplog.records)
@@ -252,7 +252,7 @@ def test_opted_out_customer_still_sees_errors_locally(monkeypatch, caplog):
 def test_opted_out_customer_still_sees_delivery_loss(monkeypatch, caplog):
     monkeypatch.setenv("MORSE_SDK_DISABLE_TELEMETRY", "1")
 
-    with caplog.at_level(logging.WARNING, logger="morse_ai._internal"):
+    with caplog.at_level(logging.WARNING, logger="amund._internal"):
         diagnostics.record_drop(diagnostics.REASON_QUEUE_FULL, "span", 5)
 
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
@@ -264,7 +264,7 @@ def test_opted_out_customer_still_sees_delivery_loss(monkeypatch, caplog):
 def test_level_off_still_logs_locally(caplog):
     diagnostics.set_level("off")
 
-    with caplog.at_level(logging.WARNING, logger="morse_ai._internal"):
+    with caplog.at_level(logging.WARNING, logger="amund._internal"):
         diagnostics.report(ValueError("boom"), fingerprint="test.leveloff")
 
     assert any("test.leveloff" in r.getMessage() for r in caplog.records)
@@ -272,7 +272,7 @@ def test_level_off_still_logs_locally(caplog):
 
 @pytest.mark.req("SDKDIAG-10")
 def test_local_logging_is_rate_limited(caplog):
-    with caplog.at_level(logging.WARNING, logger="morse_ai._internal"):
+    with caplog.at_level(logging.WARNING, logger="amund._internal"):
         for _ in range(500):
             diagnostics.report(ValueError("boom"), fingerprint="test.flood")
 
@@ -285,7 +285,7 @@ def test_local_logging_is_rate_limited(caplog):
 
 @pytest.mark.req("SDKDIAG-07")
 def test_swallow_site_helper_reports_without_changing_control_flow():
-    from morse_ai import tracing
+    from amund import tracing
 
     seen = []
 
@@ -308,7 +308,7 @@ def test_swallow_site_helper_reports_without_changing_control_flow():
 
 @pytest.mark.req("SDKDIAG-07")
 def test_absorb_errors_reports_and_returns_none():
-    from morse_ai._internal.errors import absorb_errors
+    from amund._internal.errors import absorb_errors
 
     seen = []
     original = diagnostics.report
@@ -341,7 +341,7 @@ class TestSecretAssignmentIsUnconditional:
     """
 
     def test_password_assignment_is_redacted_with_no_config_at_all(self, monkeypatch):
-        from morse_ai import tracing
+        from amund import tracing
 
         monkeypatch.setattr(tracing, "_redaction_config", None, raising=False)
         out = diagnostics._redacted_message(ValueError("boom password=hunter2 tail"))
@@ -350,8 +350,8 @@ class TestSecretAssignmentIsUnconditional:
 
     def test_still_redacted_when_the_org_disabled_the_pattern(self, monkeypatch):
         """The case the whole second pass exists for."""
-        from morse_ai import tracing
-        from morse_ai._internal.redaction import RedactionConfig
+        from amund import tracing
+        from amund._internal.redaction import RedactionConfig
 
         # Everything except secret_assignment — i.e. an org that switched it off.
         without = RedactionConfig(
@@ -365,7 +365,7 @@ class TestSecretAssignmentIsUnconditional:
 
     def test_llm_token_counts_are_not_redacted(self, monkeypatch):
         """This is an LLM-observability SDK: token COUNTS are the signal."""
-        from morse_ai import tracing
+        from amund import tracing
 
         monkeypatch.setattr(tracing, "_redaction_config", None, raising=False)
         msg = "usage input_tokens=100 output_tokens=50 max_tokens=4096"

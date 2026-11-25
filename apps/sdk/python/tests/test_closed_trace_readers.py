@@ -24,9 +24,9 @@ import logging
 
 import pytest
 
-from morse_ai import tracing
-from morse_ai.tracing import _active_trace, get_active_trace
-from morse_ai.tracing import run as av_run
+from amund import tracing
+from amund.tracing import _active_trace, get_active_trace
+from amund.tracing import run as av_run
 
 
 @pytest.fixture(autouse=True)
@@ -105,7 +105,7 @@ def test_span_on_a_closed_trace_warns_once(caplog):
     """
     _leak_a_closed_trace()
 
-    with caplog.at_level(logging.WARNING, logger="morse_ai"):
+    with caplog.at_level(logging.WARNING, logger="amund"):
         with tracing.span("first"):
             pass
         with tracing.span("second"):
@@ -120,7 +120,7 @@ def test_span_with_no_trace_at_all_warns_about_run_not_about_a_bug(caplog):
     """The two warnings must stay distinguishable — one is the customer's
     missing `run()`, the other is our leak. Sharing a latch would let the
     first mute the second."""
-    with caplog.at_level(logging.WARNING, logger="morse_ai"), tracing.span("orphan"):
+    with caplog.at_level(logging.WARNING, logger="amund"), tracing.span("orphan"):
         pass
 
     messages = [r.getMessage() for r in caplog.records]

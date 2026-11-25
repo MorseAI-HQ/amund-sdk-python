@@ -25,7 +25,7 @@ import hashlib
 import json
 from types import SimpleNamespace
 
-from morse_ai.adapters.anthropic import (
+from amund.adapters.anthropic import (
     AnthropicAdapter,
     _extract_anthropic_segments,
 )
@@ -299,13 +299,13 @@ def test_context_composition_present_in_llm_span_metadata(monkeypatch):
     """LLM span metadata contains context_composition dict when segments + tokens exist."""
     from types import SimpleNamespace
 
-    from morse_ai import tracing as _tracing
-    from morse_ai.adapters.anthropic import (
+    from amund import tracing as _tracing
+    from amund.adapters.anthropic import (
         _record_llm_span_for_response,
         install,
         uninstall,
     )
-    from morse_ai.tracing import run
+    from amund.tracing import run
 
     install()
 

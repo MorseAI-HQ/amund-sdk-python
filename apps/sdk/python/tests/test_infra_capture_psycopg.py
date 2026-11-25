@@ -19,7 +19,7 @@ import pytest
 
 psycopg = pytest.importorskip("psycopg")
 
-from morse_ai import infra_capture, tracing  # noqa: E402
+from amund import infra_capture, tracing  # noqa: E402
 
 _DSN = os.environ.get("MORSE_TEST_PG_DSN")
 live = pytest.mark.skipif(not _DSN, reason="MORSE_TEST_PG_DSN not set")

@@ -1,6 +1,6 @@
 """MHQ-672 — the openai_agents adapter must never adopt a CLOSED trace.
 
-Adapter file: `apps/sdk/python/src/morse_ai/adapters/openai_agents.py`
+Adapter file: `apps/sdk/python/src/amund/adapters/openai_agents.py`
 
 `_prepare_call` reads the active trace from a ContextVar and attaches to it
 rather than opening a new one. The ContextVar can still hold a trace that has
@@ -30,9 +30,9 @@ from __future__ import annotations
 
 import pytest
 
-from morse_ai.adapters import openai_agents as adapter
-from morse_ai.tracing import _active_trace
-from morse_ai.tracing import run as av_run
+from amund.adapters import openai_agents as adapter
+from amund.tracing import _active_trace
+from amund.tracing import run as av_run
 
 
 class _FakeAgent:
@@ -94,7 +94,7 @@ def test_each_repeated_call_gets_its_own_trace():
 
 @pytest.mark.req("MHQ-672")
 def test_an_open_caller_trace_is_still_adopted():
-    """The guard must not break explicit `with morse_ai.run(...)` nesting.
+    """The guard must not break explicit `with amund.run(...)` nesting.
 
     Only *closed* traces are rejected; an open caller-supplied trace must still
     parent the run, or every adapter span becomes its own orphan trace.

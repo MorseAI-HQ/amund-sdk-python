@@ -23,8 +23,8 @@ import pytest
 openai = pytest.importorskip("openai")
 httpx = pytest.importorskip("httpx")
 
-from morse_ai import tracing  # noqa: E402
-from morse_ai.adapters import openai as av_openai  # noqa: E402
+from amund import tracing  # noqa: E402
+from amund.adapters import openai as av_openai  # noqa: E402
 
 _DEPLOYMENT = "morse-hr-mini"
 _SERVED = "gpt-4.1-mini-2025-04-14"

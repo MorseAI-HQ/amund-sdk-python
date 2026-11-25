@@ -1,20 +1,23 @@
-"""Published-package E2E for morse-ai (PyPI).
+"""Published-package E2E for amund (PyPI).
 
 Mirrors the TS dogfood scripts: anthropic / openai / langgraph, each a
-single real LLM call inside a morse_ai.run(), sent to Morse dev.
+single real LLM call inside an amund.run(), sent to Amund dev.
 
 Usage: python run.py [anthropic|openai|langgraph|all]
-Env:   MORSE_API_KEY, MORSE_ENDPOINT, ANTHROPIC_API_KEY, OPENAI_API_KEY
+Env:   AMUND_API_KEY, AMUND_ENDPOINT (MORSE_* still read), ANTHROPIC_API_KEY,
+       OPENAI_API_KEY
 """
 
 import os
 import sys
 import time
 
-import morse_ai
+import amund
 
-ENDPOINT = os.environ.get(
-    "MORSE_ENDPOINT", "https://dev-api.morsehq.dev/api/v1/traces/batch"
+ENDPOINT = (
+    os.environ.get("AMUND_ENDPOINT")
+    or os.environ.get("MORSE_ENDPOINT")
+    or "https://dev-api.morsehq.dev/api/v1/traces/batch"
 )
 
 
@@ -29,10 +32,10 @@ def scenario_anthropic() -> None:
     require("ANTHROPIC_API_KEY")
     import anthropic
 
-    from morse_ai.adapters import anthropic as mv_anthropic
+    from amund.adapters import anthropic as mv_anthropic
 
     client = mv_anthropic.wrap(anthropic.Anthropic())
-    with morse_ai.run("pub-e2e-py-anthropic") as r:
+    with amund.run("pub-e2e-py-anthropic") as r:
         res = client.messages.create(
             model=os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5"),
             max_tokens=128,
@@ -52,10 +55,10 @@ def scenario_openai() -> None:
     require("OPENAI_API_KEY")
     import openai
 
-    from morse_ai.adapters import openai as mv_openai
+    from amund.adapters import openai as mv_openai
 
     client = mv_openai.wrap(openai.OpenAI())
-    with morse_ai.run("pub-e2e-py-openai") as r:
+    with amund.run("pub-e2e-py-openai") as r:
         res = client.chat.completions.create(
             model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
             messages=[
@@ -97,7 +100,7 @@ def scenario_langgraph() -> None:
     graph.add_edge("model", END)
     app = graph.compile()
 
-    with morse_ai.run("pub-e2e-py-langgraph") as r:
+    with amund.run("pub-e2e-py-langgraph") as r:
         result = app.invoke(
             {"messages": [HumanMessage("Reply with the single word: pong.")]}
         )
@@ -116,8 +119,9 @@ def main() -> int:
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
     names = list(SCENARIOS) if which == "all" else [which]
 
-    morse_ai.init(api_key=require("MORSE_API_KEY"), endpoint=ENDPOINT)
-    print(f"[pub-e2e-py] morse_ai={morse_ai.__version__} endpoint={ENDPOINT}")
+    key = os.environ.get("AMUND_API_KEY") or require("MORSE_API_KEY")
+    amund.init(api_key=key, endpoint=ENDPOINT)
+    print(f"[pub-e2e-py] amund={amund.__version__} endpoint={ENDPOINT}")
 
     failures = []
     for name in names:
@@ -130,8 +134,8 @@ def main() -> int:
             failures.append(name)
             print(f"[pub-e2e-py FAIL {name}] {type(exc).__name__}: {exc}")
 
-    morse_ai.flush()
-    morse_ai.shutdown()
+    amund.flush()
+    amund.shutdown()
     if failures:
         print(f"\nFAILED: {', '.join(failures)}")
         return 1

@@ -11,10 +11,10 @@ from typing import Any
 
 import pytest
 
-import morse_ai
-from morse_ai import tracing
-from morse_ai.adapters import anthropic as av_anthropic
-from morse_ai.adapters import openai as av_openai
+import amund
+from amund import tracing
+from amund.adapters import anthropic as av_anthropic
+from amund.adapters import openai as av_openai
 
 RAW = "alice@x.com"
 HASHED = "h:" + hashlib.sha256(RAW.encode()).hexdigest()[:32]
@@ -89,15 +89,15 @@ class _Anth:
 
 @pytest.fixture(autouse=True)
 def _reset():
-    from morse_ai.tracing import _active_trace
+    from amund.tracing import _active_trace
 
     _active_trace.set(None)
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
     av_openai.uninstall()
     tracing._set_capture_end_user(False)
     yield
     _active_trace.set(None)
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
     av_openai.uninstall()
     tracing._set_capture_end_user(False)
 
@@ -160,7 +160,7 @@ def test_chat_completions_gets_no_thread_facts():
 
 @pytest.mark.req("SETUP-09")
 def test_thread_facts_reach_the_otlp_wire_attributes():
-    from morse_ai.otel_provider import _span_dict_to_otel_attributes
+    from amund.otel_provider import _span_dict_to_otel_attributes
 
     client = av_openai.wrap(_OAI())
     with tracing.run("agent"):
@@ -184,9 +184,9 @@ def test_end_user_off_by_default_never_sent():
 
 @pytest.mark.req("SETUP-10")
 def test_init_option_defaults_off_and_enables():
-    morse_ai.init("mhq_test_key")
+    amund.init("mhq_test_key")
     assert tracing._capture_end_user is False
-    morse_ai.init("mhq_test_key", capture_end_user=True)
+    amund.init("mhq_test_key", capture_end_user=True)
     assert tracing._capture_end_user is True
 
 

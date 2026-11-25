@@ -1,30 +1,37 @@
-# Morse Python SDK
+# Amund Python SDK
 
-Unified observability for AI agents and infrastructure. One SDK.
+Verdict-first performance intelligence for production AI agents.
 
-**Requires Python 3.11 or newer.** On Python 3.10 or older, `pip install morse-ai` fails with
-"No matching distribution found"; only `pip install -v morse-ai` shows the real reason
+> **Renamed from `morse-ai`.** Morse is now Amund. The package is `amund`
+> (`pip install amund`, `import amund`). Existing installs keep working: the
+> `morse-ai` package is now a thin shim that installs `amund` and keeps
+> `import morse_ai` working as an alias (with a `DeprecationWarning`), and
+> every `MORSE_*` environment variable is still read. See
+> [Migrating from morse-ai](#migrating-from-morse-ai).
+
+**Requires Python 3.11 or newer.** On Python 3.10 or older, `pip install amund` fails with
+"No matching distribution found"; only `pip install -v amund` shows the real reason
 (`requires-python >=3.11`).
 
 ## Install
 
 ```bash
-pip install morse-ai
+pip install amund
 ```
 
 With an adapter (installs the underlying provider SDK too):
 
 ```bash
-pip install "morse-ai[anthropic]"
-pip install "morse-ai[openai]"
-pip install "morse-ai[openai_agents]"
-pip install "morse-ai[langgraph]"     # also pulls langchain-core
-pip install "morse-ai[claude_agent_sdk]"
-pip install "morse-ai[all]"           # every adapter
+pip install "amund[anthropic]"
+pip install "amund[openai]"
+pip install "amund[openai_agents]"
+pip install "amund[langgraph]"     # also pulls langchain-core
+pip install "amund[claude_agent_sdk]"
+pip install "amund[all]"           # every adapter
 ```
 
-The import name is `morse_ai` (underscore) regardless of which extra
-you install — `import morse_ai`.
+The import name is `amund` (underscore) regardless of which extra
+you install — `import amund`.
 
 ### Supported versions
 
@@ -59,11 +66,11 @@ evidence than it looks; cross-version coverage is MHQ-930.
 ## Quick Start
 
 ```python
-import morse_ai
+import amund
 
-morse_ai.init(api_key="mhq_xxxxx")  # pragma: allowlist secret
+amund.init(api_key="mhq_xxxxx")  # pragma: allowlist secret
 
-morse_ai.record(
+amund.record(
     agent="lead-qualifier",
     success=True,
     outcome="qualified",
@@ -74,8 +81,8 @@ morse_ai.record(
 Or trace a multi-step run:
 
 ```python
-with morse_ai.run("lead-qualifier") as r:
-    with morse_ai.span("fetch-lead", "tool"):
+with amund.run("lead-qualifier") as r:
+    with amund.span("fetch-lead", "tool"):
         ...
     r.set_outcome(True, "qualified")
 ```
@@ -86,10 +93,10 @@ spans over OTLP by default — see [Transport](#transport) below.
 ## Zero-config instrumentation
 
 ```bash
-pip install "morse-ai[anthropic]"
-export MORSE_API_KEY=mhq_xxxxx
+pip install "amund[anthropic]"
+export AMUND_API_KEY=mhq_xxxxx   # MORSE_API_KEY still works
 # your existing anthropic / openai / openai-agents / langgraph /
-# claude-agent-sdk code is now traced — no morse_ai.wrap() calls anywhere
+# claude-agent-sdk code is now traced — no amund.wrap() calls anywhere
 ```
 
 When the SDK initializes, it scans `sys.modules` for installed
@@ -103,7 +110,7 @@ raw OpenAI adapter does not record a call that a framework adapter already
 records (an OpenAI Agents run, a LangChain `ChatOpenAI` call under the
 callback handler), to avoid duplicate spans. `google-genai` and LiteLLM's
 non-OpenAI providers are not covered: send those over OTLP. Opt out entirely with
-`MORSE_DISABLE_AUTO_DETECT=1`; you can still call any adapter's
+`AMUND_DISABLE_AUTO_DETECT=1`; you can still call any adapter's
 `install()`/`wrap()` directly.
 
 The plain LangChain adapter (`MorseCallbackHandler`, for chains
@@ -115,7 +122,7 @@ outside a LangGraph graph) is **not** auto-installed — pass it via
 ### Anthropic
 
 ```python
-from morse_ai.adapters import anthropic as av_anthropic
+from amund.adapters import anthropic as av_anthropic
 import anthropic
 
 client = av_anthropic.wrap(anthropic.Anthropic())
@@ -135,7 +142,7 @@ installed the adapter globally. Pass `summarize=True` (or use the
 ### OpenAI
 
 ```python
-from morse_ai.adapters import openai as av_openai
+from amund.adapters import openai as av_openai
 import openai
 
 client = av_openai.wrap(openai.OpenAI())
@@ -163,11 +170,11 @@ same way.
 
 These three are auto-installed globally by zero-config detection (see
 above) — no wrap call needed once the package is importable and
-`MORSE_API_KEY` is set. To install manually (e.g. to control ordering,
+`AMUND_API_KEY` is set. To install manually (e.g. to control ordering,
 or with auto-detect disabled):
 
 ```python
-from morse_ai.adapters import openai_agents, langgraph, claude_agent_sdk
+from amund.adapters import openai_agents, langgraph, claude_agent_sdk
 
 openai_agents.install()      # patches agents.Runner.run / run_sync / run_streamed
 langgraph.install()          # registers a callback handler globally with LangChain
@@ -187,36 +194,36 @@ customer hook; failed tools carry the tool's error text).
 Not auto-installed — attach `MorseCallbackHandler` via `callbacks`:
 
 ```python
-from morse_ai.adapters.langchain import MorseCallbackHandler
+from amund.adapters.langchain import MorseCallbackHandler
 
 handler = MorseCallbackHandler("my-agent")
 chain = SomeChain(..., callbacks=[handler])
 ```
 
-Called inside an existing `morse_ai.run()` context, the handler
+Called inside an existing `amund.run()` context, the handler
 appends child spans to that trace. Called standalone (no enclosing
 `run()`), it auto-creates a trace that flushes when the outermost
-chain completes — no `morse_ai.run()` wrapper required.
+chain completes — no `amund.run()` wrapper required.
 
 ## Linking runs to business records and versions
 
-Tell Morse which business record a run handled and which version of your
+Tell Amund which business record a run handled and which version of your
 agent produced it, so outcomes that arrive later (a ticket closed, a refund
 issued) land on the right run and a change can be compared with what came
 before.
 
 ```python
-morse_ai.init(api_key="mhq_xxxxx", agent_version="2.4.1")  # pragma: allowlist secret
+amund.init(api_key="mhq_xxxxx", agent_version="2.4.1")  # pragma: allowlist secret
 
-with morse_ai.run(
+with amund.run(
     "support-triage",
     record_keys={"zendesk_ticket": 4812},   # known up front...
     agent_version="2.5.0-rc1",              # ...overrides init() for this run
 ):
-    morse_ai.link_record("order_id", "A-1009")   # ...or discovered mid-run
-    with morse_ai.span("classify", "llm"):
-        morse_ai.set_prompt("triage", version=7)  # pinned to this span
-    morse_ai.set_prompt("summarise")              # no version: prompts kept in code
+    amund.link_record("order_id", "A-1009")   # ...or discovered mid-run
+    with amund.span("classify", "llm"):
+        amund.set_prompt("triage", version=7)  # pinned to this span
+    amund.set_prompt("summarise")              # no version: prompts kept in code
 ```
 
 - **Record keys.** `link_record(key_type, key_value)` and `run(record_keys={...})`
@@ -231,7 +238,7 @@ with morse_ai.run(
   Inside a `span()` the reference is pinned to that span. Up to 20 per run.
   Over OTLP a span carries one reference, so if several are set on the same
   span the last one wins there; the JSON path keeps them all.
-- **Git revision.** Detected automatically from `MORSE_GIT_REVISION`,
+- **Git revision.** Detected automatically from `AMUND_GIT_REVISION`,
   `GITHUB_SHA`, `CI_COMMIT_SHA`, `RAILWAY_GIT_COMMIT_SHA`,
   `VERCEL_GIT_COMMIT_SHA`, `RENDER_GIT_COMMIT`, `SOURCE_VERSION`, then
   `git rev-parse HEAD`, in that order. In a Docker image with no `.git`
@@ -239,7 +246,7 @@ with morse_ai.run(
 
   ```dockerfile
   ARG GIT_SHA
-  ENV MORSE_GIT_REVISION=$GIT_SHA
+  ENV AMUND_GIT_REVISION=$GIT_SHA
   ```
 
   (`docker build --build-arg GIT_SHA=$(git rev-parse HEAD) .`)
@@ -252,13 +259,13 @@ Outside an open trace, `link_record()` and `set_prompt()` do nothing.
 ## Fetching hosted prompts
 
 ```python
-import morse_ai
+import amund
 
-prompt = morse_ai.get_prompt("triage")                      # label="production"
-prompt = morse_ai.get_prompt("triage", version=3)           # or pin a version
-same = morse_ai.get_prompt("triage", if_none_match=prompt.etag)
+prompt = amund.get_prompt("triage")                      # label="production"
+prompt = amund.get_prompt("triage", version=3)           # or pin a version
+same = amund.get_prompt("triage", if_none_match=prompt.etag)
 if same.not_modified: ...                                   # 304, other fields are None
-prompt = morse_ai.get_prompt("triage", cache_ttl=60)        # optional in-memory cache
+prompt = amund.get_prompt("triage", cache_ttl=60)        # optional in-memory cache
 ```
 
 `get_prompt` is a thin GET: no retries, no fallback. Inside an open run it also links that run to
@@ -269,7 +276,7 @@ reference is kept. It raises `PromptAccessError` (403, the key needs the
 `prompts:read` scope), `PromptNotFoundError` (404) and `PromptRateLimitError` (429, `.retry_after`);
 network failures raise `httpx`'s transport errors.
 
-We recommend caching in some form so Morse is not on your request hot path. You have three options:
+We recommend caching in some form so Amund is not on your request hot path. You have three options:
 
 1. **Call the API directly** on every use (the default). Responses carry `Cache-Control: max-age=30`.
 2. **Use your own cache**, with a bundled fallback prompt if you want one.
@@ -282,10 +289,10 @@ We recommend caching in some form so Morse is not on your request hot path. You 
 ## Capturing logs alongside agent traces
 
 If you already use stdlib `logging` or `structlog`, you can ship every
-log line to Morse with one line of config. Each record is
+log line to Amund with one line of config. Each record is
 auto-correlated with the active trace (the one entered via
-`morse_ai.run()`, `@morse_ai.trace_agent`, or any active
-`morse_ai.span(...)`) and appears under the trace's **Logs** tab on
+`amund.run()`, `@amund.trace_agent`, or any active
+`amund.span(...)`) and appears under the trace's **Logs** tab on
 the dashboard.
 
 The shim re-uses the SDK's batched transport — no blocking I/O on your
@@ -295,10 +302,10 @@ hot path.
 
 ```python
 import logging
-import morse_ai
-from morse_ai.logging import MorseHandler
+import amund
+from amund.logging import MorseHandler
 
-morse_ai.init(api_key="mhq_xxxxx")  # pragma: allowlist secret
+amund.init(api_key="mhq_xxxxx")  # pragma: allowlist secret
 logging.basicConfig(level=logging.INFO, handlers=[MorseHandler()])
 ```
 
@@ -306,14 +313,14 @@ logging.basicConfig(level=logging.INFO, handlers=[MorseHandler()])
 
 ```python
 import structlog
-import morse_ai
-from morse_ai.logging import structlog_processor
+import amund
+from amund.logging import structlog_processor
 
-morse_ai.init(api_key="mhq_xxxxx")  # pragma: allowlist secret
+amund.init(api_key="mhq_xxxxx")  # pragma: allowlist secret
 structlog.configure(processors=[structlog_processor, structlog.processors.JSONRenderer()])
 ```
 
-Log lines emitted outside any trace context still flow to Morse — they
+Log lines emitted outside any trace context still flow to Amund — they
 just won't be correlated to a specific trace. Errors inside the
 handler / processor are absorbed and never propagate into your
 `logger.info(...)` call.
@@ -343,7 +350,7 @@ to send elsewhere.
 
 The SDK ships with PII redaction **on by default**. Span attributes and
 event payloads are scrubbed inside your process before any data leaves
-for the Morse ingest endpoint. You can opt out per-pattern, opt out
+for the Amund ingest endpoint. You can opt out per-pattern, opt out
 entirely, or extend the catalogue with your own regex.
 
 ### What gets redacted by default
@@ -363,9 +370,9 @@ entirely, or extend the catalogue with your own regex.
 ### Configuring redaction
 
 ```python
-import morse_ai
+import amund
 
-morse_ai.init(
+amund.init(
     api_key="mhq_xxxxx",  # pragma: allowlist secret
     # All four kwargs below are optional; defaults are shown.
     redaction_enabled=True,
@@ -396,12 +403,36 @@ other metadata are never redacted.
 ## Docs
 
 Full reference — every adapter, all `init()` options, configuration,
-troubleshooting — lives at **[docs.morseai.dev](https://docs.morseai.dev)**.
+troubleshooting — lives at **[docs.amundai.com](https://docs.amundai.com)**.
 This README stays a quickstart.
 
 ## Naming
 
-The PyPI project is `morse-ai`; the import name is `morse_ai`
-(Python's underscore convention). The npm package for the TypeScript
-SDK is `@morsehq-dev/sdk` — see that package's README for why it
-doesn't match this one's naming.
+The PyPI project and the import name are both `amund`. The npm package for
+the TypeScript SDK is `@morsehq-dev/sdk` — see that package's README for why
+it doesn't match this one's naming.
+
+## Migrating from morse-ai
+
+Nothing breaks if you change nothing: `pip install morse-ai` now installs the
+same version of `amund` plus a `morse_ai` alias package. `import morse_ai`,
+`from morse_ai.adapters.openai import ...` and `mock.patch("morse_ai....")`
+all resolve to the very same `amund` module objects, so singletons and
+`isinstance` checks are shared. Importing `morse_ai` emits a
+`DeprecationWarning`. To move over:
+
+```bash
+pip uninstall morse-ai
+pip install amund              # same extras: "amund[anthropic]" etc.
+```
+
+- Replace `import morse_ai` / `from morse_ai...` with `import amund` /
+  `from amund...`.
+- Environment variables are now `AMUND_*` (`AMUND_API_KEY`,
+  `AMUND_ENDPOINT`, `AMUND_DISABLED`, ...). Every `MORSE_*` name is still
+  read; when both are set, the `AMUND_` value wins.
+- The SDK's own logger is now `amund` (was `morse_ai`). If you configured it
+  by name, e.g. `logging.getLogger("morse_ai").setLevel(...)` or a
+  `dictConfig` `loggers` entry, rename it to `amund`.
+- Nothing changes on the wire: span attributes, headers and the default
+  endpoint are the same, so dashboards and alerts keep working.

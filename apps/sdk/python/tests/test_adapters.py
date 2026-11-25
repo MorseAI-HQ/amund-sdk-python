@@ -1,7 +1,7 @@
 """Tests for Anthropic and OpenAI adapters."""
 
-from morse_ai.adapters.anthropic import AnthropicAdapter
-from morse_ai.adapters.openai import OpenAIAdapter
+from amund.adapters.anthropic import AnthropicAdapter
+from amund.adapters.openai import OpenAIAdapter
 
 
 class TestAnthropicAdapter:

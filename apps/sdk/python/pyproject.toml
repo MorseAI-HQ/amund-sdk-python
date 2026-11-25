@@ -3,13 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "morse-ai"
+name = "amund"
 version = "0.9.1rc1"
-description = "Unified observability for AI agents and infrastructure. One SDK."
+description = "Amund Python SDK: verdict-first performance intelligence for production AI agents."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11,<4.0"
-authors = [{ name = "Morse", email = "hello@morseai.dev" }]
+authors = [{ name = "Amund", email = "hello@amundai.com" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -37,14 +37,14 @@ openai = ["openai>=1.50.0"]
 openai_agents = ["openai-agents>=0.15.0,<1.0"]
 langchain = ["langchain-core>=1.0"]
 langgraph = ["langgraph>=1.0", "langchain-core>=1.0"]
-# MHQ-928 — the claude_agent_sdk adapter (src/morse_ai/adapters/claude_agent_sdk.py)
+# MHQ-928 — the claude_agent_sdk adapter (src/amund/adapters/claude_agent_sdk.py)
 # has shipped and auto-installed since 2026-06-22 with no extra declaring it and
 # the package never installed in CI: its tests use hand-written mock classes,
 # because the adapter classifies content blocks by type(x).__name__. Floor is
 # 0.1.0 to match the TS SDK's peer range. NOT yet exercised against the real
 # package in CI — MHQ-930 adds the canary lane that would prove this floor.
 claude_agent_sdk = ["claude-agent-sdk>=0.1.0"]
-# MHQ-133 — Strands Agents: the adapter routes Strands' own OTel spans to Morse.
+# MHQ-133 — Strands Agents: the adapter routes Strands' own OTel spans to Amund.
 strands = ["strands-agents>=1.0.0"]
 # MHQ-1506 — google-genai adapter (Gemini API + Vertex AI). The private
 # per-request methods it patches exist across 1.x and 2.x.
@@ -72,11 +72,18 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://morseai.dev"
-Documentation = "https://docs.morseai.dev"
+Homepage = "https://amundai.com"
+Documentation = "https://docs.amundai.com"
+Repository = "https://github.com/MorseAI-HQ/amund-sdk-python"
+Changelog = "https://github.com/MorseAI-HQ/amund-sdk-python/blob/develop/apps/sdk/python/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/morse_ai"]
+packages = ["src/amund"]
+
+# compat/morse-ai is its own distribution (the morse-ai shim); keep it out of
+# the amund sdist.
+[tool.hatch.build.targets.sdist]
+exclude = ["/compat"]
 
 [tool.ruff]
 target-version = "py311"

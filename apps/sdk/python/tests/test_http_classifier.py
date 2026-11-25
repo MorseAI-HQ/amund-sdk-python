@@ -1,8 +1,8 @@
-"""Tests for morse_ai.instrumentation.http_classifier."""
+"""Tests for amund.instrumentation.http_classifier."""
 
 import pytest
 
-from morse_ai.instrumentation.http_classifier import classify_http_span
+from amund.instrumentation.http_classifier import classify_http_span
 
 
 @pytest.mark.req("MEM-17")

@@ -16,8 +16,8 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.trace import SpanContext, TraceFlags
 
-from morse_ai import otel_provider
-from morse_ai._internal import diagnostics
+from amund import otel_provider
+from amund._internal import diagnostics
 
 
 @pytest.fixture(autouse=True)
@@ -130,7 +130,7 @@ def test_drop_is_warned_about_locally_with_a_count(caplog):
     """SDKDIAG-10: nothing we learn is private from the host."""
     exporter = _exporter(429)
 
-    with caplog.at_level("WARNING", logger="morse_ai._internal"):
+    with caplog.at_level("WARNING", logger="amund._internal"):
         exporter.export([_one_span()])
 
     assert "dropped 1 span" in caplog.text

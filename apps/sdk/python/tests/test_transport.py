@@ -6,7 +6,7 @@ import httpx
 import pytest
 import respx
 
-from morse_ai.transport import BatchTransport
+from amund.transport import BatchTransport
 
 
 @pytest.fixture

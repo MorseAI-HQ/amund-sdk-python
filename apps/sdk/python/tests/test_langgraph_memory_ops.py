@@ -23,8 +23,8 @@ from typing import Any
 
 import pytest
 
-from morse_ai import tracing
-from morse_ai.adapters.langgraph import (
+from amund import tracing
+from amund.adapters.langgraph import (
     _MEMORY_OP_DEDUP_WINDOW_MS,
     LangGraphCallbackHandler,
     _emit_memory_op_span,
@@ -341,7 +341,7 @@ def test_dedup_resets_after_window(fake_langgraph_modules):
 
 @pytest.mark.req("MEM-10")
 def test_no_op_outside_trace_context(fake_langgraph_modules):
-    """Calling patched methods with no active morse_ai.run yields no spans."""
+    """Calling patched methods with no active amund.run yields no spans."""
     _install_memory_op_patches()
     cp_cls, store_cls = fake_langgraph_modules
     cp = cp_cls()
@@ -827,7 +827,7 @@ def test_sub_agent_inherits_parent_trace_context():
     without creating a new trace — its _auto_trace stays False so it never
     closes the parent trace when its own chain ends.
     """
-    from morse_ai.tracing import _active_trace
+    from amund.tracing import _active_trace
 
     sub_handler = LangGraphCallbackHandler("sub-agent")
 
@@ -864,7 +864,7 @@ def test_independent_agent_gets_own_trace_when_no_active_context():
     """
     handler = LangGraphCallbackHandler("standalone-agent")
 
-    from morse_ai.tracing import _active_trace
+    from amund.tracing import _active_trace
 
     assert _active_trace.get() is None, "No active trace should exist before this test"
 

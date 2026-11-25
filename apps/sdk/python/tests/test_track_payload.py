@@ -13,29 +13,29 @@ from unittest.mock import patch
 
 import pytest
 
-import morse_ai
-from morse_ai.tracing import _get_last_trace
+import amund
+from amund.tracing import _get_last_trace
 
 
 @pytest.fixture
 def queued() -> Any:
-    morse_ai._reset_for_testing()
-    morse_ai.init(
+    amund._reset_for_testing()
+    amund.init(
         api_key="av_test_track",  # pragma: allowlist secret
         endpoint="http://localhost:19999/api/v1/traces/batch",
     )
     events: list[dict[str, Any]] = []
-    assert morse_ai._client is not None
+    assert amund._client is not None
     with patch.object(
-        morse_ai._client.transport, "track", side_effect=lambda e: events.append(e)
+        amund._client.transport, "track", side_effect=lambda e: events.append(e)
     ):
         yield events
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
 
 
 @pytest.mark.req("MHQ-1410")
 def test_track_queues_a_v2_trace(queued: list[dict[str, Any]]) -> None:
-    morse_ai.track(
+    amund.track(
         agent_id="lead-qualifier",
         run_data={
             "success": True,
@@ -63,7 +63,7 @@ def test_track_queues_a_v2_trace(queued: list[dict[str, Any]]) -> None:
 
 @pytest.mark.req("MHQ-1410")
 def test_batch_track_queues_one_trace_per_run(queued: list[dict[str, Any]]) -> None:
-    morse_ai.batch_track(
+    amund.batch_track(
         [
             {"agent": "a", "success": True},
             {"agent": "b", "error_message": "boom"},

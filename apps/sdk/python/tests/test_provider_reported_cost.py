@@ -11,11 +11,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from morse_ai.adapters.base import (
+from amund.adapters.base import (
     extract_provider_reported_cost,
     merge_provider_reported_cost,
 )
-from morse_ai.adapters.openai import OpenAIAdapter
+from amund.adapters.openai import OpenAIAdapter
 
 # ---------------------------------------------------------------------------
 # Helper-level tests
@@ -224,9 +224,9 @@ def _make_llm_result(llm_output: dict[str, Any] | None, text: str = "hi") -> Any
 
 class TestLangChainAdapterProviderCost:
     def _run_on_llm_end(self, response: Any):
-        import morse_ai
-        from morse_ai.adapters.langchain import MorseCallbackHandler
-        from morse_ai.tracing import run
+        import amund
+        from amund.adapters.langchain import MorseCallbackHandler
+        from amund.tracing import run
 
         captured: dict[str, Any] = {}
         handler = MorseCallbackHandler(agent_name="t")
@@ -241,7 +241,7 @@ class TestLangChainAdapterProviderCost:
             traced = handler._span_stack.get(str(rid))
             handler._on_llm_end_impl(response, rid)
             captured["metadata"] = traced._span.metadata if traced else None
-        del morse_ai  # ensure import side-effects don't linger
+        del amund  # ensure import side-effects don't linger
         return captured["metadata"]
 
     def test_openrouter_via_langchain_populates_span_metadata(self):

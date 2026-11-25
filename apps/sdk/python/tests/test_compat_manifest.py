@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from morse_ai.data.compat import get_library_status, load_manifest
+from amund.data.compat import get_library_status, load_manifest
 
 
 @pytest.mark.req("MEM-20")

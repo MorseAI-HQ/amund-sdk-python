@@ -6,9 +6,9 @@ import uuid
 
 import pytest
 
-from morse_ai import tracing
-from morse_ai.adapters._retrieval import build_documents
-from morse_ai.adapters.langchain import MorseCallbackHandler
+from amund import tracing
+from amund.adapters._retrieval import build_documents
+from amund.adapters.langchain import MorseCallbackHandler
 
 
 class MockDocument:

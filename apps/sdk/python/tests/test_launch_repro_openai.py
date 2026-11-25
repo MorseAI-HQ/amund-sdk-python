@@ -24,8 +24,8 @@ import pytest
 openai = pytest.importorskip("openai")
 httpx = pytest.importorskip("httpx")
 
-from morse_ai import tracing  # noqa: E402
-from morse_ai.adapters import openai as av_openai  # noqa: E402
+from amund import tracing  # noqa: E402
+from amund.adapters import openai as av_openai  # noqa: E402
 
 _MODEL = "gpt-4.1-nano-2025-04-14"
 _BASE = "https://api.openai.test/v1"
@@ -472,7 +472,7 @@ def test_mhq1410_responses_tool_loop_emits_tool_span_and_keeps_input_items(
 @pytest.mark.req("MHQ-1506")
 def test_mhq1506_openai_agents_run_is_not_double_counted(installed):
     agents = pytest.importorskip("agents")
-    from morse_ai.adapters import openai_agents as av_agents
+    from amund.adapters import openai_agents as av_agents
 
     def handler(request):  # noqa: ANN001, ANN202
         return httpx.Response(200, json=_response_obj())

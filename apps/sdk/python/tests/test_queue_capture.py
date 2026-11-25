@@ -2,9 +2,9 @@
 
 import pytest
 
-from morse_ai import queue_capture as qc
-from morse_ai.propagation import get_current_traceparent
-from morse_ai.tracing import _get_last_trace, run
+from amund import queue_capture as qc
+from amund.propagation import get_current_traceparent
+from amund.tracing import _get_last_trace, run
 
 celery = pytest.importorskip("celery")
 boto3 = pytest.importorskip("boto3")

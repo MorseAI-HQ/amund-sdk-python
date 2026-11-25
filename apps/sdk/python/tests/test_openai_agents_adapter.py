@@ -1,6 +1,6 @@
 """Tests for the OpenAI Agents (`openai-agents`) adapter.
 
-Adapter file: `apps/sdk/python/src/morse_ai/adapters/openai_agents.py`
+Adapter file: `apps/sdk/python/src/amund/adapters/openai_agents.py`
 
 These tests exercise the adapter at the lifecycle-hook level. We don't make
 real LLM calls — instead we drive the adapter's `_MorseRunHooks` instance
@@ -19,10 +19,10 @@ from typing import Any
 
 import pytest
 
-import morse_ai
-from morse_ai.adapters import openai_agents as adapter
-from morse_ai.spans import SpanData, SpanType
-from morse_ai.tracing import (
+import amund
+from amund.adapters import openai_agents as adapter
+from amund.spans import SpanData, SpanType
+from amund.tracing import (
     _active_trace,
     _TraceState,
 )
@@ -36,11 +36,11 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def _reset_singleton():
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
     adapter.uninstall()
     adapter._session_ids.clear()
     yield
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
     adapter.uninstall()
     adapter._session_ids.clear()
 
@@ -482,11 +482,11 @@ def test_user_hook_exception_does_not_break_av_hooks():
 
 
 def test_openai_agents_appears_in_adapter_targets_when_importable():
-    from morse_ai._internal import auto_detect as ad
+    from amund._internal import auto_detect as ad
 
     targets = ad._adapter_targets()
     assert "agents" in targets
-    assert targets["agents"] == "morse_ai.adapters.openai_agents"
+    assert targets["agents"] == "amund.adapters.openai_agents"
 
 
 def test_on_llm_end_prefers_response_model_over_agent_model():

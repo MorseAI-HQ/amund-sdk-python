@@ -10,7 +10,7 @@ import hashlib
 
 import pytest
 
-from morse_ai.context.decomposer import compute_composition, decompose_openai_messages
+from amund.context.decomposer import compute_composition, decompose_openai_messages
 
 # ---------------------------------------------------------------------------
 # Helpers

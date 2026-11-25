@@ -45,9 +45,9 @@ import requests
 from botocore.client import BaseClient
 from botocore.stub import Stubber
 
-from morse_ai import infra_capture as ic
-from morse_ai import queue_capture as qc
-from morse_ai.tracing import run
+from amund import infra_capture as ic
+from amund import queue_capture as qc
+from amund.tracing import run
 
 NO_TRACE_MAX_PCT = 2.0
 NO_TRACE_MAX_US = 5.0

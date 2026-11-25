@@ -24,11 +24,11 @@ from strands import Agent, tool  # noqa: E402
 from strands.models.model import Model  # noqa: E402
 from strands.telemetry import tracer as st_tracer  # noqa: E402
 
-from morse_ai._internal import auto_detect  # noqa: E402
-from morse_ai._internal.active_framework import get_llm_owner  # noqa: E402
-from morse_ai._internal.redaction import RedactionConfig  # noqa: E402
-from morse_ai.adapters import strands as av_strands  # noqa: E402
-from morse_ai.otel_provider import _RedactingSpanExporter, get_engine  # noqa: E402
+from amund._internal import auto_detect  # noqa: E402
+from amund._internal.active_framework import get_llm_owner  # noqa: E402
+from amund._internal.redaction import RedactionConfig  # noqa: E402
+from amund.adapters import strands as av_strands  # noqa: E402
+from amund.otel_provider import _RedactingSpanExporter, get_engine  # noqa: E402
 
 
 class _ScriptedModel(Model):
@@ -166,7 +166,7 @@ def test_zero_code_agent_spans_reach_the_morse_provider(engine):
     assert scope.version and scope.version != "unknown"
     # Resource is the Morse engine's (service.name pinned, not Strands').
     assert spans[0].resource.attributes["service.name"] == "unknown_service"
-    from morse_ai._version import __version__
+    from amund._version import __version__
 
     assert spans[0].resource.attributes["morse.sdk.version"] == __version__
 
@@ -284,4 +284,4 @@ def test_install_is_idempotent_and_uninstall_restores():
 
 @pytest.mark.req("MHQ-133")
 def test_auto_detect_targets_strands():
-    assert auto_detect._adapter_targets()["strands"] == "morse_ai.adapters.strands"
+    assert auto_detect._adapter_targets()["strands"] == "amund.adapters.strands"

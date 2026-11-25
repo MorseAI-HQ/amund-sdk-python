@@ -2,7 +2,7 @@
 
 import time
 
-from morse_ai.queue import TelemetryQueue
+from amund.queue import TelemetryQueue
 
 
 class TestPerformance:
@@ -33,7 +33,7 @@ class TestPerformance:
 
     def test_record_dict_creation_under_100_microseconds(self):
         """RunRecord creation + to_dict() should be fast."""
-        from morse_ai.record import RunRecord
+        from amund.record import RunRecord
 
         iterations = 10_000
         start = time.perf_counter_ns()

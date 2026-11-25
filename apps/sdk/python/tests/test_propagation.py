@@ -13,13 +13,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
 
-from morse_ai.propagation import (
+from amund.propagation import (
     W3C_TRACEPARENT_HEADER,
     extract_traceparent,
     get_current_traceparent,
     inject_traceparent,
 )
-from morse_ai.tracing import _active_trace, _set_transport, run, trace_agent
+from amund.tracing import _active_trace, _set_transport, run, trace_agent
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -257,7 +257,7 @@ class TestCrossServicePropagation:
         incoming = "00-abcdef1234567890abcdef1234567890-1234567890abcdef-01"
         expected_trace_id = "abcdef1234567890abcdef1234567890"
 
-        from morse_ai.tracing import _get_last_trace
+        from amund.tracing import _get_last_trace
 
         with run("downstream-agent", incoming_traceparent=incoming):
             pass
@@ -271,7 +271,7 @@ class TestCrossServicePropagation:
     @pytest.mark.req("SDK-10")
     def test_run_without_incoming_traceparent_generates_new_trace_id(self):
         """run() without incoming_traceparent generates a fresh trace_id."""
-        from morse_ai.tracing import _get_last_trace
+        from amund.tracing import _get_last_trace
 
         with run("standalone-agent"):
             pass
@@ -286,7 +286,7 @@ class TestCrossServicePropagation:
     @pytest.mark.req("SDK-10")
     def test_two_services_sharing_traceparent_have_same_trace_id(self):
         """Two services sharing a traceparent appear as a single trace (same trace_id)."""
-        from morse_ai.tracing import _get_last_trace
+        from amund.tracing import _get_last_trace
 
         # Service A: creates a trace and injects traceparent into outgoing headers
         headers = {}
@@ -321,7 +321,7 @@ class TestCrossServicePropagation:
     @pytest.mark.req("SDK-10")
     def test_run_with_invalid_incoming_traceparent_generates_new_trace_id(self):
         """run() with invalid incoming_traceparent gracefully generates a new trace_id."""
-        from morse_ai.tracing import _get_last_trace
+        from amund.tracing import _get_last_trace
 
         with run("safe-agent", incoming_traceparent="invalid-garbage"):
             pass

@@ -17,9 +17,9 @@ from typing import Any
 
 import pytest
 
-from morse_ai.adapters import anthropic as av_anthropic
-from morse_ai.spans import SpanType
-from morse_ai.tracing import run
+from amund.adapters import anthropic as av_anthropic
+from amund.spans import SpanType
+from amund.tracing import run
 
 # ---------------------------------------------------------------------------
 # Fakes — minimal Anthropic-shaped doubles
@@ -98,7 +98,7 @@ def captured_traces():
     ``{"traces": [entry]}`` capture shape so the rest of this file's
     assertions (``captured_traces[0]["traces"][0][...]``) need no changes.
     """
-    from morse_ai import tracing as _tracing
+    from amund import tracing as _tracing
 
     captured: list[dict[str, Any]] = []
     original = _tracing._finish_trace

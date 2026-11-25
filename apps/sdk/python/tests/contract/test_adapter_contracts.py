@@ -199,7 +199,7 @@ def test_langgraph_callback_manager_hook_is_patchable() -> None:
 def test_langchain_handler_subclasses_the_real_base() -> None:
     from langchain_core.callbacks import BaseCallbackHandler
 
-    from morse_ai.adapters.langchain import MorseCallbackHandler
+    from amund.adapters.langchain import MorseCallbackHandler
 
     # The adapter falls back to a stub base class when langchain_core is
     # missing. With it installed the handler must be a REAL subclass, or

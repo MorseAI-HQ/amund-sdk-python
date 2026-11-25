@@ -21,14 +21,14 @@ httpx = pytest.importorskip("httpx")
 from google.auth import credentials as google_credentials  # noqa: E402
 from google.genai import types  # noqa: E402
 
-from morse_ai import tracing  # noqa: E402
-from morse_ai._internal import auto_detect  # noqa: E402
-from morse_ai._internal.active_framework import (  # noqa: E402
+from amund import tracing  # noqa: E402
+from amund._internal import auto_detect  # noqa: E402
+from amund._internal.active_framework import (  # noqa: E402
     reset_llm_owner,
     set_llm_owner,
 )
-from morse_ai.adapters import google_genai as av_genai  # noqa: E402
-from morse_ai.pricing import calculate_cost  # noqa: E402
+from amund.adapters import google_genai as av_genai  # noqa: E402
+from amund.pricing import calculate_cost  # noqa: E402
 
 _MODEL = "gemini-2.5-flash-lite"
 _FAKE_KEY = "test-not-a-real-key"  # pragma: allowlist secret
@@ -401,7 +401,7 @@ def test_install_is_idempotent_and_uninstall_restores():
 @pytest.mark.req("MHQ-1506")
 def test_auto_detect_targets_google_genai():
     assert auto_detect._adapter_targets()["google.genai"] == (
-        "morse_ai.adapters.google_genai"
+        "amund.adapters.google_genai"
     )
 
 

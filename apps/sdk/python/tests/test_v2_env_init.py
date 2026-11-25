@@ -19,16 +19,16 @@ from unittest.mock import patch
 
 import pytest
 
-import morse_ai
-from morse_ai._internal import diagnostics
+import amund
+from amund._internal import diagnostics
 
 
 def setup_function() -> None:
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
 
 
 def teardown_function() -> None:
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
 
 
 # ---------------------------------------------------------------------------
@@ -41,38 +41,38 @@ def test_track_auto_inits_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MORSE_API_KEY", "av_env_test")
     monkeypatch.setenv("MORSE_ENDPOINT", "http://localhost:9999/api/v1/traces/batch")
 
-    assert morse_ai._client is None
-    morse_ai.track(agent_id="my-agent", run_data={"success": True})
+    assert amund._client is None
+    amund.track(agent_id="my-agent", run_data={"success": True})
     # After first track(), the singleton is up.
-    assert morse_ai._client is not None
-    assert "localhost:9999" in morse_ai._client.endpoint
+    assert amund._client is not None
+    assert "localhost:9999" in amund._client.endpoint
 
 
 def test_no_api_key_keeps_sdk_dormant(monkeypatch: pytest.MonkeyPatch) -> None:
     """Without MORSE_API_KEY, the SDK stays dormant and track() is no-op."""
     monkeypatch.delenv("MORSE_API_KEY", raising=False)
-    morse_ai.track(agent_id="my-agent", run_data={"success": True})
-    assert morse_ai._client is None
+    amund.track(agent_id="my-agent", run_data={"success": True})
+    assert amund._client is None
 
 
 def test_no_api_key_emits_one_time_warning(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.delenv("MORSE_API_KEY", raising=False)
-    with caplog.at_level(logging.WARNING, logger="morse_ai"):
-        morse_ai.track(agent_id="a", run_data={})
-        morse_ai.track(agent_id="a", run_data={})
-        morse_ai.track(agent_id="a", run_data={})
+    with caplog.at_level(logging.WARNING, logger="amund"):
+        amund.track(agent_id="a", run_data={})
+        amund.track(agent_id="a", run_data={})
+        amund.track(agent_id="a", run_data={})
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1, "warning must fire exactly once per process"
-    assert "MORSE_API_KEY" in warnings[0].getMessage()
+    assert "AMUND_API_KEY" in warnings[0].getMessage()
 
 
 def test_explicit_init_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MORSE_API_KEY", "av_env_value")
-    morse_ai.init(api_key="av_explicit_value")
-    assert morse_ai._client is not None
-    assert morse_ai._client._api_key == "av_explicit_value"
+    amund.init(api_key="av_explicit_value")
+    assert amund._client is not None
+    assert amund._client._api_key == "av_explicit_value"
 
 
 # ---------------------------------------------------------------------------
@@ -82,15 +82,15 @@ def test_explicit_init_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_disabled_makes_init_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MORSE_DISABLED", "1")
-    morse_ai.init(api_key="av_test")
-    assert morse_ai._client is None  # init bailed without constructing transport
+    amund.init(api_key="av_test")
+    assert amund._client is None  # init bailed without constructing transport
 
 
 def test_disabled_makes_track_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MORSE_DISABLED", "1")
     monkeypatch.setenv("MORSE_API_KEY", "av_test")
-    morse_ai.track(agent_id="a", run_data={"x": 1})
-    assert morse_ai._client is None
+    amund.track(agent_id="a", run_data={"x": 1})
+    assert amund._client is None
 
 
 # ---------------------------------------------------------------------------
@@ -100,30 +100,30 @@ def test_disabled_makes_track_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.real_default_endpoint
 def test_init_logs_destination_url_once(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.INFO, logger="morse_ai"):
-        morse_ai.init(api_key="av_log_test")
+    with caplog.at_level(logging.INFO, logger="amund"):
+        amund.init(api_key="av_log_test")
         # Re-init with same endpoint — should NOT re-log.
-        morse_ai.init(api_key="av_log_test")
+        amund.init(api_key="av_log_test")
     log_lines = [
         r.getMessage()
         for r in caplog.records
-        if "Morse SDK initialized" in r.getMessage()
+        if "Amund SDK initialized" in r.getMessage()
     ]
     assert len(log_lines) == 1, f"expected 1 transparency log, got {len(log_lines)}"
     assert "api.amundai.com" in log_lines[0]
 
 
 def test_init_re_logs_when_endpoint_changes(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.INFO, logger="morse_ai"):
-        morse_ai.init(api_key="av_test")
-        morse_ai.init(
+    with caplog.at_level(logging.INFO, logger="amund"):
+        amund.init(api_key="av_test")
+        amund.init(
             api_key="av_test",
             endpoint="https://other.example.com/api/v1/traces/batch",
         )
     log_lines = [
         r.getMessage()
         for r in caplog.records
-        if "Morse SDK initialized" in r.getMessage()
+        if "Amund SDK initialized" in r.getMessage()
     ]
     assert len(log_lines) == 2, "endpoint change should re-log"
 
@@ -134,26 +134,26 @@ def test_init_re_logs_when_endpoint_changes(caplog: pytest.LogCaptureFixture) ->
 
 
 def test_track_absorbs_internal_exceptions() -> None:
-    """If the underlying _Client.track raises, morse_ai.track() does NOT propagate."""
-    morse_ai.init(api_key="av_test", endpoint="http://localhost:0/api/v1/traces/batch")
-    assert morse_ai._client is not None
+    """If the underlying _Client.track raises, amund.track() does NOT propagate."""
+    amund.init(api_key="av_test", endpoint="http://localhost:0/api/v1/traces/batch")
+    assert amund._client is not None
 
     # Inject a bug into the underlying client.
     def _broken_track(agent_id: str, run_data: dict) -> None:
         raise RuntimeError("simulated SDK bug")
 
-    with patch.object(morse_ai._client, "track", side_effect=_broken_track):
+    with patch.object(amund._client, "track", side_effect=_broken_track):
         # MUST NOT raise:
-        result = morse_ai.track(agent_id="my-agent", run_data={"success": True})
+        result = amund.track(agent_id="my-agent", run_data={"success": True})
         assert result is None
 
 
 def test_record_absorbs_internal_exceptions() -> None:
-    morse_ai.init(api_key="av_test", endpoint="http://localhost:0/api/v1/traces/batch")
-    assert morse_ai._client is not None
+    amund.init(api_key="av_test", endpoint="http://localhost:0/api/v1/traces/batch")
+    assert amund._client is not None
 
-    with patch.object(morse_ai._client, "record", side_effect=ValueError("boom")):
-        result = morse_ai.record(agent="a", success=True)
+    with patch.object(amund._client, "record", side_effect=ValueError("boom")):
+        result = amund.record(agent="a", success=True)
         assert result is None
 
 
@@ -163,23 +163,23 @@ def test_init_absorbs_constructor_exceptions(monkeypatch: pytest.MonkeyPatch) ->
     def _broken_ctor(*args: object, **kwargs: object) -> None:
         raise RuntimeError("transport failed to start")
 
-    monkeypatch.setattr("morse_ai._Client.__init__", _broken_ctor)
+    monkeypatch.setattr("amund._Client.__init__", _broken_ctor)
     # Must NOT raise:
-    morse_ai.init(api_key="av_test")
-    assert morse_ai._client is None
+    amund.init(api_key="av_test")
+    assert amund._client is None
 
 
 def test_keyboard_interrupt_still_propagates() -> None:
     """KeyboardInterrupt is intentionally NOT absorbed — Ctrl-C must work."""
-    morse_ai.init(api_key="av_test", endpoint="http://localhost:0/api/v1/traces/batch")
-    assert morse_ai._client is not None
+    amund.init(api_key="av_test", endpoint="http://localhost:0/api/v1/traces/batch")
+    assert amund._client is not None
 
     def _ki(*args: object, **kwargs: object) -> None:
         raise KeyboardInterrupt()
 
-    with patch.object(morse_ai._client, "track", side_effect=_ki):
+    with patch.object(amund._client, "track", side_effect=_ki):
         with pytest.raises(KeyboardInterrupt):
-            morse_ai.track(agent_id="a", run_data={})
+            amund.track(agent_id="a", run_data={})
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +197,7 @@ def test_local_logging_is_rate_limited(caplog: pytest.LogCaptureFixture) -> None
     is its own, smaller number.
     """
     diagnostics._reset_for_testing()
-    with caplog.at_level(logging.WARNING, logger="morse_ai._internal"):
+    with caplog.at_level(logging.WARNING, logger="amund._internal"):
         for _ in range(150):
             diagnostics.report(ValueError("boom"), fingerprint="test.rate_limit")
     log_lines = [r for r in caplog.records if "test.rate_limit" in r.getMessage()]
@@ -245,7 +245,7 @@ def test_telemetry_opt_out_still_logs_locally(
     """
     diagnostics._reset_for_testing()
     monkeypatch.setenv("MORSE_SDK_DISABLE_TELEMETRY", "1")
-    with caplog.at_level(logging.WARNING, logger="morse_ai._internal"):
+    with caplog.at_level(logging.WARNING, logger="amund._internal"):
         diagnostics.report(ValueError("boom"), fingerprint="test.disabled")
     assert any("test.disabled" in r.getMessage() for r in caplog.records), (
         "opting out of transmission must not suppress the local log"
@@ -259,7 +259,7 @@ def test_sdk_debug_raises_log_level(
     """MORSE_SDK_DEBUG=1 logs internal errors at ERROR (default WARNING)."""
     diagnostics._reset_for_testing()
     monkeypatch.setenv("MORSE_SDK_DEBUG", "1")
-    with caplog.at_level(logging.WARNING, logger="morse_ai._internal"):
+    with caplog.at_level(logging.WARNING, logger="amund._internal"):
         diagnostics.report(ValueError("boom"), fingerprint="test.debug_level")
     error_lines = [
         r
