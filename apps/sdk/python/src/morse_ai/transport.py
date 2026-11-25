@@ -13,6 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from morse_ai._internal import diagnostics
+from morse_ai._internal.json_default import json_default
 from morse_ai._internal.redaction import DISABLED_CONFIG, RedactionConfig
 from morse_ai._version import __version__
 from morse_ai.queue import SHUTDOWN, TelemetryQueue
@@ -70,48 +71,9 @@ def _derive_logs_endpoint(traces_endpoint: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, "/api/v1/logs/ingest", "", ""))
 
 
-def _json_default(obj: Any) -> Any:
-    """Fallback JSON serializer for non-primitive values.
-
-    AGE-240: LangChain / LangGraph callback handlers receive ``inputs`` and
-    ``response`` payloads that contain custom objects (HumanMessage,
-    AIMessage, Document, ndarray, datetime, Decimal, UUID, etc.). These
-    leak into span ``input_data`` / ``output_data`` and break the default
-    ``json.dumps`` with ``TypeError: Object of type X is not JSON
-    serializable``, dropping the whole batch.
-
-    Strategy (cheap → expensive):
-    1. Pydantic-like model: ``model_dump`` or ``dict()`` returns a dict.
-    2. Generic dataclass / NamedTuple / hasattr ``__dict__``: vars().
-    3. iterable (set, generator, ndarray-like): list().
-    4. final fallback: ``str(obj)`` — guarantees a serializable result.
-
-    Never raises — at worst returns ``"<unserializable>"``.
-    """
-    try:
-        # 1) Pydantic v2 → v1 → other model libs
-        dump = getattr(obj, "model_dump", None) or getattr(obj, "dict", None)
-        if callable(dump):
-            try:
-                return dump()
-            except Exception:  # noqa: BLE001
-                pass
-        # 2) dataclasses / generic objects
-        if hasattr(obj, "__dict__"):
-            try:
-                return {k: v for k, v in vars(obj).items() if not k.startswith("_")}
-            except Exception:  # noqa: BLE001
-                pass
-        # 3) iterable
-        if hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes)):
-            try:
-                return list(obj)
-            except Exception:  # noqa: BLE001
-                pass
-        # 4) final fallback
-        return str(obj)
-    except Exception:  # noqa: BLE001
-        return "<unserializable>"
+# MHQ-1936: moved to ``_internal/json_default.py`` so ``otel_provider`` uses
+# the same serializer; the old private name stays importable.
+_json_default = json_default
 
 
 class BatchTransport:

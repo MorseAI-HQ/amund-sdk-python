@@ -88,6 +88,7 @@ from opentelemetry.trace import (
 )
 
 from morse_ai._internal.agent_name import env_service_name
+from morse_ai._internal.json_default import json_default
 from morse_ai._internal.redaction import DISABLED_CONFIG, RedactionConfig
 from morse_ai._internal.span_ids import otel_span_id_for
 from morse_ai._version import __version__
@@ -142,13 +143,18 @@ def json_capped(value: Any, max_bytes: int) -> str | None:
     blobs as a whole (same behavior as a malformed ``morse.context_segments``
     attribute today), so this is a safety valve against unbounded payload
     growth, not a guarantee of partial preservation.
+
+    Non-primitive values go through the shared ``json_default`` serializer
+    (MHQ-1936): LangChain/LangGraph messages become ``{"type", "content",
+    ...}`` dicts rather than their Python repr; ``str()`` is used only for
+    objects it cannot structure.
     """
     if value is None:
         return None
     if isinstance(value, str):
         return json.dumps(cap_bytes(value, max_bytes))
     try:
-        encoded = json.dumps(value, default=str)
+        encoded = json.dumps(value, default=json_default)
     except (TypeError, ValueError):
         encoded = json.dumps(str(value))
     return cap_bytes(encoded, max_bytes)
