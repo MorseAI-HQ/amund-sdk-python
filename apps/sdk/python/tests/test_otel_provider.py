@@ -400,3 +400,94 @@ def test_parents_first_orders_parents_ahead_and_survives_cycles():
     kid = {"span_id": "k", "parent_span_id": "p"}
     par = {"span_id": "p", "parent_span_id": None}
     assert _parents_first([kid, par], "p") == [par, kid]
+
+
+# ---------------------------------------------------------------------------
+# MHQ-1936: LangChain/LangGraph messages serialize as JSON, not repr
+# ---------------------------------------------------------------------------
+
+
+class _FakeMessage:
+    """Pydantic-shaped stand-in for a LangChain ``BaseMessage``."""
+
+    def __init__(self, type_: str, content, **extra):
+        self.type = type_
+        self.content = content
+        self._extra = extra
+
+    def model_dump(self):
+        return {"type": self.type, "content": self.content, **self._extra}
+
+    def __repr__(self):
+        return f"FakeMessage(content={self.content!r})"
+
+
+class TestJsonCappedMessages:
+    def test_fake_message_serializes_as_structured_dict(self):
+        msg = _FakeMessage(
+            "ai",
+            "hi",
+            tool_calls=[{"name": "search", "args": {"q": "x"}, "id": "call_1"}],
+            name=None,
+            id="",
+            additional_kwargs={},
+            invalid_tool_calls=[],
+            example=False,
+        )
+        decoded = json.loads(json_capped({"messages": [msg]}, 10_000))
+        (dumped,) = decoded["messages"]
+        assert dumped["type"] == "ai"
+        assert dumped["content"] == "hi"
+        assert dumped["tool_calls"][0]["name"] == "search"
+        # Empty fields dropped, falsy-but-meaningful values kept.
+        for key in ("name", "id", "additional_kwargs", "invalid_tool_calls"):
+            assert key not in dumped
+        assert dumped["example"] is False
+
+    def test_fake_message_no_repr_string(self):
+        encoded = json_capped([_FakeMessage("human", "hello")], 10_000)
+        assert "FakeMessage(content=" not in encoded
+        assert json.loads(encoded) == [{"type": "human", "content": "hello"}]
+
+    def test_non_message_model_keeps_empty_fields(self):
+        class _Model:
+            def model_dump(self):
+                return {"a": None, "b": []}
+
+        assert json.loads(json_capped(_Model(), 10_000)) == {"a": None, "b": []}
+
+    def test_unknown_object_falls_back_to_str(self):
+        class _Opaque:
+            __slots__ = ()
+
+            def __str__(self):
+                return "opaque!"
+
+        assert json.loads(json_capped({"x": _Opaque()}, 10_000)) == {"x": "opaque!"}
+
+    def test_size_cap_still_applies(self):
+        msg = _FakeMessage("human", "x" * 5_000)
+        encoded = json_capped([msg], 200)
+        assert len(encoded.encode("utf-8")) <= 200 + len(
+            TRUNCATION_MARKER.encode("utf-8")
+        )
+        assert encoded.endswith(TRUNCATION_MARKER)
+
+    def test_real_langchain_messages(self):
+        messages = pytest.importorskip("langchain_core.messages")
+        human = messages.HumanMessage(content="What is 2+2?")
+        ai = messages.AIMessage(
+            content="",
+            tool_calls=[{"name": "calc", "args": {"expr": "2+2"}, "id": "call_1"}],
+        )
+        encoded = json_capped({"messages": [human, ai]}, 10_000)
+        assert "HumanMessage(content=" not in encoded
+        assert "AIMessage(content=" not in encoded
+        h, a = json.loads(encoded)["messages"]
+        assert h["type"] == "human"
+        assert h["content"] == "What is 2+2?"
+        assert "id" not in h and "name" not in h
+        assert a["type"] == "ai"
+        assert a["content"] == ""  # kept even when empty
+        assert a["tool_calls"][0]["name"] == "calc"
+        assert a["tool_calls"][0]["args"] == {"expr": "2+2"}
