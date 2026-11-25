@@ -12,8 +12,8 @@ import httpx
 import pytest
 import respx
 
-import morse_ai.transport as transport_mod
-from morse_ai.transport import BatchTransport, _parse_retry_after
+import amund.transport as transport_mod
+from amund.transport import BatchTransport, _parse_retry_after
 
 ENDPOINT = "https://test.api/api/v1/traces/batch"
 
@@ -78,7 +78,7 @@ class TestRetryPolicy:
                 429, json=EVENT_LIMIT_BODY, headers={"Retry-After": "0"}
             )
         )
-        caplog.set_level(logging.DEBUG, logger="morse_ai")
+        caplog.set_level(logging.DEBUG, logger="amund")
         transport = make_transport()
         try:
             transport.track({"traces": [{"trace": {"agent": "a"}, "spans": []}]})
@@ -105,7 +105,7 @@ class TestRetryPolicy:
                 httpx.Response(200, json={"accepted": 1}),
             ]
         )
-        caplog.set_level(logging.DEBUG, logger="morse_ai")
+        caplog.set_level(logging.DEBUG, logger="amund")
         transport = make_transport()
         try:
             transport.track({"traces": [{"trace": {"agent": "a"}, "spans": []}]})
@@ -129,7 +129,7 @@ class TestRetryPolicy:
         route = mock_endpoint.post(ENDPOINT).mock(
             return_value=httpx.Response(400, text="bad payload: missing trace_id")
         )
-        caplog.set_level(logging.DEBUG, logger="morse_ai")
+        caplog.set_level(logging.DEBUG, logger="amund")
         transport = make_transport()
         try:
             transport.track({"traces": [{"trace": {"agent": "a"}, "spans": []}]})
@@ -151,7 +151,7 @@ class TestRetryPolicy:
         route = mock_endpoint.post(ENDPOINT).mock(
             return_value=httpx.Response(503, text="upstream sad")
         )
-        caplog.set_level(logging.DEBUG, logger="morse_ai")
+        caplog.set_level(logging.DEBUG, logger="amund")
         transport = make_transport()
         try:
             transport.track({"traces": [{"trace": {"agent": "a"}, "spans": []}]})
@@ -290,7 +290,7 @@ class TestQuotaState:
                 429, json=EVENT_LIMIT_BODY, headers={"Retry-After": "0"}
             )
         )
-        caplog.set_level(logging.DEBUG, logger="morse_ai")
+        caplog.set_level(logging.DEBUG, logger="amund")
         transport = make_transport()
         try:
             transport.track({"traces": [{"trace": {"agent": "a"}, "spans": []}]})
@@ -324,23 +324,23 @@ class TestQuotaState:
 @pytest.mark.req("TQE-04")
 class TestModuleLevelQuotaState:
     def test_uninitialized_returns_none(self):
-        import morse_ai
+        import amund
 
-        morse_ai._reset_for_testing()
+        amund._reset_for_testing()
         try:
-            assert morse_ai.quota_state() is None
+            assert amund.quota_state() is None
         finally:
-            morse_ai._reset_for_testing()
+            amund._reset_for_testing()
 
     def test_initialized_exposes_transport_state(
         self, mock_endpoint, fast_backoff, monkeypatch
     ):
-        import morse_ai
+        import amund
 
         monkeypatch.delenv("MORSE_DISABLED", raising=False)
-        morse_ai._reset_for_testing()
+        amund._reset_for_testing()
         try:
-            morse_ai.init(
+            amund.init(
                 api_key="av_test",  # pragma: allowlist secret
                 endpoint=ENDPOINT,
                 flush_interval=0.05,
@@ -348,11 +348,11 @@ class TestModuleLevelQuotaState:
             mock_endpoint.post(ENDPOINT).mock(
                 return_value=httpx.Response(429, json=EVENT_LIMIT_BODY)
             )
-            morse_ai.track("agent-x", {"agent": "agent-x", "success": True})
-            assert wait_for(lambda: morse_ai.quota_state() is not None)
-            assert morse_ai.quota_state()["kind"] == "event_limit"
+            amund.track("agent-x", {"agent": "agent-x", "success": True})
+            assert wait_for(lambda: amund.quota_state() is not None)
+            assert amund.quota_state()["kind"] == "event_limit"
         finally:
-            morse_ai._reset_for_testing()
+            amund._reset_for_testing()
 
 
 @pytest.mark.req("TQE-04")

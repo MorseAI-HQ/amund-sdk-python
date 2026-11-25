@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import asyncio
 
-from morse_ai import tracing
-from morse_ai.adapters import claude_agent_sdk as adapter
+from amund import tracing
+from amund.adapters import claude_agent_sdk as adapter
 
 
 class TextBlock:

@@ -5,8 +5,8 @@ import sqlite3
 import httpx
 import pytest
 
-from morse_ai import infra_capture as ic
-from morse_ai.tracing import _get_last_trace, run
+from amund import infra_capture as ic
+from amund.tracing import _get_last_trace, run
 
 _ENV = (
     "MORSE_CAPTURE_INFRA",

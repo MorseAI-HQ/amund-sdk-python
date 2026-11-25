@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import pytest
 
-from morse_ai.adapters import openai_agents as adapter
-from morse_ai.tracing import _active_trace, adopt_thread_id
-from morse_ai.tracing import run as av_run
+from amund.adapters import openai_agents as adapter
+from amund.tracing import _active_trace, adopt_thread_id
+from amund.tracing import run as av_run
 
 
 class _FakeAgent:

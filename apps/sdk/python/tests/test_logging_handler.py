@@ -3,7 +3,7 @@
 Verifies the SDK side of Gap A from the Phase 12.5 plan:
 
 - ``MorseHandler`` captures stdlib logger calls inside an
-  ``morse_ai.run()`` context and enqueues a log payload with the active
+  ``amund.run()`` context and enqueues a log payload with the active
   ``trace_id`` + ``span_id``.
 - The handler still emits (with ``trace_id=None``) when no trace is active.
 - Internal transport errors are absorbed — the customer's
@@ -23,15 +23,15 @@ from typing import Any
 
 import pytest
 
-import morse_ai
-from morse_ai.logging import MorseHandler, structlog_processor
+import amund
+from amund.logging import MorseHandler, structlog_processor
 
 
 class _FakeTransport:
     """Drop-in replacement for ``BatchTransport`` that records enqueues.
 
     Implements just enough of the ``BatchTransport`` surface that
-    ``_Client`` / ``morse_ai._reset_for_testing`` won't blow up:
+    ``_Client`` / ``amund._reset_for_testing`` won't blow up:
     ``track`` (the one we actually assert on), ``flush``, ``shutdown``,
     and the ``redaction_config`` property.
     """
@@ -39,7 +39,7 @@ class _FakeTransport:
     def __init__(self, *, raise_on_track: bool = False) -> None:
         self.events: list[dict[str, Any]] = []
         self.raise_on_track = raise_on_track
-        from morse_ai._internal.redaction import DISABLED_CONFIG
+        from amund._internal.redaction import DISABLED_CONFIG
 
         self.redaction_config = DISABLED_CONFIG
 
@@ -64,33 +64,33 @@ def fake_transport(monkeypatch: pytest.MonkeyPatch) -> _FakeTransport:
     overwrite the singleton's transport reference. Going via the public init
     keeps the rest of the SDK state (redaction config, source tag) consistent.
 
-    We also register the fake with the tracing module so ``morse_ai.run()``
+    We also register the fake with the tracing module so ``amund.run()``
     routes its trace emission through the fake instead of the real
     ``BatchTransport`` (which would try to POST to ``test.invalid`` and log a
     noisy warning).
     """
-    from morse_ai.tracing import _set_transport
+    from amund.tracing import _set_transport
 
-    morse_ai._reset_for_testing()
-    morse_ai.init(
+    amund._reset_for_testing()
+    amund.init(
         api_key="av_phase125_test",  # pragma: allowlist secret
         endpoint="http://test.invalid/api/v1/traces/batch",
     )
     fake = _FakeTransport()
     # Replace the client's transport with the fake. ``_get_transport`` reads
     # ``_client.transport`` so we patch the underlying attribute.
-    assert morse_ai._client is not None
-    monkeypatch.setattr(morse_ai._client, "_transport", fake)
+    assert amund._client is not None
+    monkeypatch.setattr(amund._client, "_transport", fake)
     # Also route trace emissions through the fake (tracing reads its own ref).
     _set_transport(fake)
     yield fake
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
 
 
 @pytest.fixture
 def isolated_logger() -> stdlib_logging.Logger:
     """A logger with NO inherited handlers, so each test asserts deterministically."""
-    log = stdlib_logging.getLogger(f"morse_ai.test.phase125.{id(object())}")
+    log = stdlib_logging.getLogger(f"amund.test.phase125.{id(object())}")
     log.handlers.clear()
     log.propagate = False
     log.setLevel(stdlib_logging.DEBUG)
@@ -98,7 +98,7 @@ def isolated_logger() -> stdlib_logging.Logger:
 
 
 class TestMorseHandlerInsideTrace:
-    """Handler under an active ``morse_ai.run()`` context."""
+    """Handler under an active ``amund.run()`` context."""
 
     def test_captures_log_inside_trace_with_matching_trace_id(
         self,
@@ -108,7 +108,7 @@ class TestMorseHandlerInsideTrace:
         handler = MorseHandler()
         isolated_logger.addHandler(handler)
 
-        with morse_ai.run("test-agent") as ctx:
+        with amund.run("test-agent") as ctx:
             isolated_logger.info("hi from inside a trace")
             active_trace_id = ctx.trace_id
 
@@ -132,7 +132,7 @@ class TestMorseHandlerInsideTrace:
         """WARNING maps to WARN; ERROR / CRITICAL pass through unchanged."""
         isolated_logger.addHandler(MorseHandler())
 
-        with morse_ai.run("severity-agent"):
+        with amund.run("severity-agent"):
             isolated_logger.warning("careful")
             isolated_logger.error("oops")
             isolated_logger.critical("boom")
@@ -147,7 +147,7 @@ class TestMorseHandlerInsideTrace:
         isolated_logger: stdlib_logging.Logger,
     ) -> None:
         isolated_logger.addHandler(MorseHandler())
-        with morse_ai.run("attr-agent"):
+        with amund.run("attr-agent"):
             isolated_logger.info("with attrs")
 
         log_events = [e for e in fake_transport.events if "logs" in e]
@@ -162,7 +162,7 @@ class TestMorseHandlerInsideTrace:
         isolated_logger: stdlib_logging.Logger,
     ) -> None:
         isolated_logger.addHandler(MorseHandler(service_name="api-prod"))
-        with morse_ai.run("svc-agent"):
+        with amund.run("svc-agent"):
             isolated_logger.info("service-tagged")
 
         log_events = [e for e in fake_transport.events if "logs" in e]
@@ -199,17 +199,17 @@ class TestMorseHandlerErrorAbsorption:
         monkeypatch: pytest.MonkeyPatch,
         isolated_logger: stdlib_logging.Logger,
     ) -> None:
-        from morse_ai.tracing import _set_transport
+        from amund.tracing import _set_transport
 
-        morse_ai._reset_for_testing()
-        morse_ai.init(
+        amund._reset_for_testing()
+        amund.init(
             api_key="av_abs_test",  # pragma: allowlist secret
             endpoint="http://test.invalid/api/v1/traces/batch",
         )
         # Install a transport that raises on every track() call.
         explosive = _FakeTransport(raise_on_track=True)
-        assert morse_ai._client is not None
-        monkeypatch.setattr(morse_ai._client, "_transport", explosive)
+        assert amund._client is not None
+        monkeypatch.setattr(amund._client, "_transport", explosive)
         _set_transport(explosive)
 
         handler = MorseHandler()
@@ -218,10 +218,10 @@ class TestMorseHandlerErrorAbsorption:
         try:
             # The customer's logger.info() must return normally even though
             # _enqueue_log raises internally. We assert by not catching.
-            with morse_ai.run("explode-agent"):
+            with amund.run("explode-agent"):
                 isolated_logger.info("this would crash a naive handler")
         finally:
-            morse_ai._reset_for_testing()
+            amund._reset_for_testing()
 
     def test_uninitialized_sdk_is_silent_noop(
         self,
@@ -233,7 +233,7 @@ class TestMorseHandlerErrorAbsorption:
         Also disables the env var so ``_ensure_initialized`` returns False
         without auto-init kicking in.
         """
-        morse_ai._reset_for_testing()
+        amund._reset_for_testing()
         monkeypatch.delenv("MORSE_API_KEY", raising=False)
         monkeypatch.setenv("MORSE_DISABLED", "1")
         try:
@@ -241,14 +241,14 @@ class TestMorseHandlerErrorAbsorption:
             # No init() called. logger.info() must return normally.
             isolated_logger.info("uninitialized — no-op")
         finally:
-            morse_ai._reset_for_testing()
+            amund._reset_for_testing()
 
 
 class TestStructlogProcessor:
     """Processor enriches event_dict only when a trace is active."""
 
     def test_inserts_trace_id_when_active(self, fake_transport: _FakeTransport) -> None:
-        with morse_ai.run("structlog-agent") as ctx:
+        with amund.run("structlog-agent") as ctx:
             event_dict = structlog_processor(
                 None,
                 "info",
@@ -287,7 +287,7 @@ class TestStructlogProcessor:
     def test_does_not_clobber_existing_trace_id(
         self, fake_transport: _FakeTransport
     ) -> None:
-        with morse_ai.run("clobber-agent"):
+        with amund.run("clobber-agent"):
             event_dict = structlog_processor(
                 None,
                 "info",
@@ -305,23 +305,23 @@ class TestStructlogProcessor:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The processor must NEVER raise — structlog chain integrity."""
-        from morse_ai.tracing import _set_transport
+        from amund.tracing import _set_transport
 
-        morse_ai._reset_for_testing()
-        morse_ai.init(
+        amund._reset_for_testing()
+        amund.init(
             api_key="av_struct_err",  # pragma: allowlist secret
             endpoint="http://test.invalid/api/v1/traces/batch",
         )
         explosive = _FakeTransport(raise_on_track=True)
-        assert morse_ai._client is not None
-        monkeypatch.setattr(morse_ai._client, "_transport", explosive)
+        assert amund._client is not None
+        monkeypatch.setattr(amund._client, "_transport", explosive)
         _set_transport(explosive)
         try:
             result = structlog_processor(None, "info", {"event": "boom"})
             # Returns the original event_dict; does NOT raise.
             assert result["event"] == "boom"
         finally:
-            morse_ai._reset_for_testing()
+            amund._reset_for_testing()
 
 
 class TestTransportLogRouting:
@@ -334,7 +334,7 @@ class TestTransportLogRouting:
         import httpx
         import respx
 
-        from morse_ai.transport import BatchTransport
+        from amund.transport import BatchTransport
 
         traces_url = "https://test.api/v1/traces/batch"
         logs_url = "https://test.api/api/v1/logs/ingest"

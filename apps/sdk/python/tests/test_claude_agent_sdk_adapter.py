@@ -14,8 +14,8 @@ import asyncio as _asyncio
 
 import pytest
 
-from morse_ai import tracing
-from morse_ai.adapters import claude_agent_sdk as adapter
+from amund import tracing
+from amund.adapters import claude_agent_sdk as adapter
 
 # ---------------------------------------------------------------------------
 # Mock content blocks / messages (matched by class __name__)

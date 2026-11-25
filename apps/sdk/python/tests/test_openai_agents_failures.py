@@ -1,12 +1,12 @@
 """MHQ-1406 — OpenAI Agents adapter must record failures and the served model.
 
-Adapter: `apps/sdk/python/src/morse_ai/adapters/openai_agents.py`
+Adapter: `apps/sdk/python/src/amund/adapters/openai_agents.py`
 
 Real `Runner` + fake `Model` objects, in-process, no network. Three defects
 from the 2026-10-18 dogfood round:
 
 1. a model-call exception under a *bare* ``Runner`` left the trace
-   ``completed`` (only the explicit ``morse_ai.run()`` path recorded it);
+   ``completed`` (only the explicit ``amund.run()`` path recorded it);
 2. a function tool that raised was swallowed by the Agents SDK (fed to the
    model as an error string) and showed as a successful tool span;
 3. an ``Agent`` with no ``model=`` produced ``model=NULL`` and so no cost.
@@ -39,18 +39,18 @@ from openai.types.responses import (  # noqa: E402
     ResponseOutputText,
 )
 
-import morse_ai  # noqa: E402
-from morse_ai import tracing  # noqa: E402
-from morse_ai.adapters import openai_agents as adapter  # noqa: E402
-from morse_ai.spans import SpanData, SpanType  # noqa: E402
-from morse_ai.tracing import _active_trace, _TraceState  # noqa: E402
+import amund  # noqa: E402
+from amund import tracing  # noqa: E402
+from amund.adapters import openai_agents as adapter  # noqa: E402
+from amund.spans import SpanData, SpanType  # noqa: E402
+from amund.tracing import _active_trace, _TraceState  # noqa: E402
 
 set_tracing_disabled(True)
 
 
 @pytest.fixture(autouse=True)
 def _installed():
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
     adapter.uninstall()
     adapter.install()
     yield
@@ -58,7 +58,7 @@ def _installed():
     # made later tests (e.g. test_langchain_adapter::test_auto_trace_creation)
     # see an already-open trace.
     _active_trace.set(None)
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
     adapter.uninstall()
 
 

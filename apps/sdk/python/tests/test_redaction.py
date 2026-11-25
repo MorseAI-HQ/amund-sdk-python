@@ -20,8 +20,8 @@ from pathlib import Path
 
 import pytest
 
-import morse_ai
-from morse_ai._internal.redaction import (
+import amund
+from amund._internal.redaction import (
     CUSTOM_REPLACEMENT,
     DEFAULT_OFF_PATTERNS,
     DEPTH_MARKER,
@@ -33,7 +33,7 @@ from morse_ai._internal.redaction import (
     RedactionConfig,
     redact_string,
 )
-from morse_ai.client import _Client
+from amund.client import _Client
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -57,7 +57,7 @@ def all_patterns_config() -> RedactionConfig:
 
 
 def _reset() -> None:
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
 
 
 def setup_function() -> None:
@@ -479,7 +479,7 @@ def test_init_rejects_disabling_mandatory_pattern() -> None:
     """The public ``init()`` surface MUST raise on misconfig — not silently
     swallow it through the absorb_errors decorator."""
     with pytest.raises(ValueError, match="cannot be disabled"):
-        morse_ai.init(
+        amund.init(
             api_key="av_init_bad",
             endpoint="http://localhost:9999/api/v1/traces/batch",
             redaction_disabled_patterns=["api_key_prefixed"],
@@ -489,7 +489,7 @@ def test_init_rejects_disabling_mandatory_pattern() -> None:
 @pytest.mark.req("PHASE-6F-G02")
 def test_init_rejects_uncompilable_extra_pattern() -> None:
     with pytest.raises(ValueError, match="failed to compile"):
-        morse_ai.init(
+        amund.init(
             api_key="av_init_bad_regex",
             endpoint="http://localhost:9999/api/v1/traces/batch",
             redaction_extra_patterns=["(unbalanced"],
@@ -562,7 +562,7 @@ def test_pattern_keys_are_canonical_order() -> None:
 def test_all_patterns_are_compilable_python_regex() -> None:
     """Self-check: every pattern source compiles as a Python regex (would-be
     smoke test if a future edit introduces a typo)."""
-    from morse_ai._internal.redaction import _COMPILED  # noqa: SLF001
+    from amund._internal.redaction import _COMPILED  # noqa: SLF001
 
     for key in PATTERN_KEYS:
         assert isinstance(_COMPILED[key], re.Pattern)

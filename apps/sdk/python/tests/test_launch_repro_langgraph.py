@@ -3,10 +3,10 @@
 Each test reproduces the *exact* scenario from the Linear issue, not a unit of
 the fix, on a fake chat model (no network, no LLM keys):
 
-- MHQ-1402: the documented zero-config integration (``morse_ai.init()`` only)
+- MHQ-1402: the documented zero-config integration (``amund.init()`` only)
   on an async graph served the way FastAPI serves it — several requests
   running ``ainvoke`` / ``astream`` concurrently on one event loop, no
-  ``morse_ai.run()``. Each request must get its own trace with every span and
+  ``amund.run()``. Each request must get its own trace with every span and
   its tokens.
 - MHQ-1403: the published snippet (zero-config *plus* an explicit
   ``MorseCallbackHandler`` in ``config``) on a tool-calling ReAct graph with
@@ -35,9 +35,9 @@ from langchain_core.tools import tool  # noqa: E402
 from langgraph.graph import END, START, StateGraph  # noqa: E402
 from langgraph.types import Command  # noqa: E402
 
-from morse_ai import tracing  # noqa: E402
-from morse_ai.adapters import langgraph as lga  # noqa: E402
-from morse_ai.adapters.langchain import MorseCallbackHandler  # noqa: E402
+from amund import tracing  # noqa: E402
+from amund.adapters import langgraph as lga  # noqa: E402
+from amund.adapters.langchain import MorseCallbackHandler  # noqa: E402
 
 
 class _ToolCallingFake(BaseChatModel):
@@ -82,7 +82,7 @@ def _react_graph():
 
 @pytest.fixture(autouse=True)
 def _zero_config():
-    """Reproduce ``morse_ai.init()``'s auto-install, nothing else."""
+    """Reproduce ``amund.init()``'s auto-install, nothing else."""
     token = tracing._active_trace.set(None)
     lga.uninstall()
     tracing._last_trace = None

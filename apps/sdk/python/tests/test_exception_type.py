@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import time
 
-from morse_ai import tracing
-from morse_ai.spans import SpanData, SpanType
-from morse_ai.tracing import _active_trace, _finalize_span, exception_type_name
+from amund import tracing
+from amund.spans import SpanData, SpanType
+from amund.tracing import _active_trace, _finalize_span, exception_type_name
 
 
 class CustomBoom(Exception):

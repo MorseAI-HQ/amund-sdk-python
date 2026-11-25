@@ -9,11 +9,11 @@ import sqlite3
 
 import pytest
 
-from morse_ai.infra_capture import (
+from amund.infra_capture import (
     disable_db_capture,
     enable_db_capture,
 )
-from morse_ai.tracing import _get_last_trace, run
+from amund.tracing import _get_last_trace, run
 
 
 @pytest.fixture(autouse=True)
@@ -71,7 +71,7 @@ def test_db_span_captures_statement_text():
 
 
 def test_db_statement_truncated_when_huge():
-    from morse_ai.infra_capture import _MAX_STATEMENT_LEN, _safe_statement
+    from amund.infra_capture import _MAX_STATEMENT_LEN, _safe_statement
 
     huge = "SELECT * FROM t WHERE id IN (" + ",".join(["?"] * 5000) + ")"
     out = _safe_statement(huge)

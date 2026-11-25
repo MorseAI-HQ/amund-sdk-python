@@ -9,8 +9,8 @@ Part C (OTLP adapter mapping) lives in
 because the adapter is a Django app module.
 """
 
-from morse_ai.adapters.langgraph import _scope_for_op
-from morse_ai.context.decomposer import compute_composition
+from amund.adapters.langgraph import _scope_for_op
+from amund.context.decomposer import compute_composition
 
 # ---------------------------------------------------------------------------
 # A. Anthropic LLM span → context_composition

@@ -50,7 +50,7 @@ def anthropic_client():
 
 @pytest.fixture
 def adapter():
-    from morse_ai.adapters.anthropic import AnthropicAdapter
+    from amund.adapters.anthropic import AnthropicAdapter
 
     return AnthropicAdapter()
 
@@ -95,7 +95,7 @@ def test_streaming_response_extracts_token_counts(anthropic_client, adapter):
 @requires_key
 def test_recorded_cost_matches_pricing_table_within_5pct(anthropic_client, adapter):
     """Recorded cost_usd within ±5% of (input_tokens × in + output_tokens × out)."""
-    from morse_ai.pricing import get_model_pricing
+    from amund.pricing import get_model_pricing
 
     response = anthropic_client.messages.create(
         model=LIVE_MODEL,

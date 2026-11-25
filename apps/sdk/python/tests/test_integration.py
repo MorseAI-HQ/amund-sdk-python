@@ -15,7 +15,7 @@ import time
 import httpx
 import pytest
 
-import morse_ai
+import amund
 
 
 @pytest.mark.req("US-01", "US-04")
@@ -27,11 +27,11 @@ def test_sdk_record_appears_in_backend():
 
     agent_name = f"integration-test-agent-{int(time.time())}"
 
-    morse_ai.init(
+    amund.init(
         api_key=api_key,
         endpoint=f"{api_url}/api/v1/traces/batch",
     )
-    morse_ai.record(
+    amund.record(
         agent=agent_name,
         success=True,
         outcome="verified",
@@ -40,7 +40,7 @@ def test_sdk_record_appears_in_backend():
         input_tokens=100,
         output_tokens=50,
     )
-    morse_ai.flush()
+    amund.flush()
 
     # flush() waits for queue drain; background thread may still be mid-POST.
     # Give it a short grace period before polling.

@@ -13,8 +13,8 @@ import httpx
 import pytest
 import respx
 
-import morse_ai
-from morse_ai import otel_provider, tracing
+import amund
+from amund import otel_provider, tracing
 
 BASE = "https://api.morse.test"
 BODY = {
@@ -29,12 +29,12 @@ FETCH_REF = {"name": "triage", "version": 3, "link_source": "fetch"}
 
 @pytest.fixture(autouse=True)
 def linkenv(monkeypatch):
-    morse_ai._reset_for_testing()
-    morse_ai.clear_prompt_cache()
+    amund._reset_for_testing()
+    amund.clear_prompt_cache()
     tracing._transport = None
     tracing._last_trace = None
     monkeypatch.setattr(
-        morse_ai,
+        amund,
         "_client",
         SimpleNamespace(
             endpoint=f"{BASE}/api/v1/traces/batch",
@@ -42,9 +42,9 @@ def linkenv(monkeypatch):
         ),
     )
     yield
-    morse_ai.clear_prompt_cache()
-    monkeypatch.setattr(morse_ai, "_client", None)  # fake has no reset hook
-    morse_ai._reset_for_testing()
+    amund.clear_prompt_cache()
+    monkeypatch.setattr(amund, "_client", None)  # fake has no reset hook
+    amund._reset_for_testing()
 
 
 def _route():
@@ -60,8 +60,8 @@ def _prompts_of_last_trace():
 @respx.mock
 def test_fetch_inside_run_links_with_link_source():
     _route().mock(return_value=httpx.Response(200, json=BODY))
-    with morse_ai.run("agent"):
-        morse_ai.get_prompt("triage")
+    with amund.run("agent"):
+        amund.get_prompt("triage")
     assert _prompts_of_last_trace() == [FETCH_REF]
 
 
@@ -69,8 +69,8 @@ def test_fetch_inside_run_links_with_link_source():
 @respx.mock
 def test_fetch_inside_span_pins_span_id():
     _route().mock(return_value=httpx.Response(200, json=BODY))
-    with morse_ai.run("agent"), morse_ai.span("llm"):
-        morse_ai.get_prompt("triage")
+    with amund.run("agent"), amund.span("llm"):
+        amund.get_prompt("triage")
     ref = _prompts_of_last_trace()[0]
     assert ref["link_source"] == "fetch" and ref["span_id"]
 
@@ -79,7 +79,7 @@ def test_fetch_inside_span_pins_span_id():
 @respx.mock
 def test_no_active_run_is_noop():
     _route().mock(return_value=httpx.Response(200, json=BODY))
-    assert morse_ai.get_prompt("triage").version == 3
+    assert amund.get_prompt("triage").version == 3
     assert tracing.get_active_trace() is None
 
 
@@ -87,8 +87,8 @@ def test_no_active_run_is_noop():
 @respx.mock
 def test_link_false_never_links():
     _route().mock(return_value=httpx.Response(200, json=BODY))
-    with morse_ai.run("agent"):
-        morse_ai.get_prompt("triage", link=False)
+    with amund.run("agent"):
+        amund.get_prompt("triage", link=False)
     assert not _prompts_of_last_trace()
 
 
@@ -96,9 +96,9 @@ def test_link_false_never_links():
 @respx.mock
 def test_cache_hit_links_a_new_run():
     route = _route().mock(return_value=httpx.Response(200, json=BODY))
-    morse_ai.get_prompt("triage", cache_ttl=60)  # warm cache, no run
-    with morse_ai.run("agent"):
-        morse_ai.get_prompt("triage", cache_ttl=60)
+    amund.get_prompt("triage", cache_ttl=60)  # warm cache, no run
+    with amund.run("agent"):
+        amund.get_prompt("triage", cache_ttl=60)
     assert route.call_count == 1
     assert _prompts_of_last_trace() == [FETCH_REF]
 
@@ -107,13 +107,13 @@ def test_cache_hit_links_a_new_run():
 @respx.mock
 def test_cache_hit_in_thread_without_run_does_not_link():
     _route().mock(return_value=httpx.Response(200, json=BODY))
-    morse_ai.get_prompt("triage", cache_ttl=60)
+    amund.get_prompt("triage", cache_ttl=60)
     seen = {}
 
     def worker():
-        seen["prompt"] = morse_ai.get_prompt("triage", cache_ttl=60)
+        seen["prompt"] = amund.get_prompt("triage", cache_ttl=60)
 
-    with morse_ai.run("agent"):
+    with amund.run("agent"):
         t = threading.Thread(target=worker)  # fresh thread: empty contextvars
         t.start()
         t.join()
@@ -131,14 +131,14 @@ def test_304_links_via_cached_prompt_only():
             httpx.Response(304, headers={"ETag": '"abc"'}),
         ]
     )
-    morse_ai.get_prompt("triage", cache_ttl=60)  # cache populated
-    with morse_ai.run("agent"):
-        p = morse_ai.get_prompt("triage", if_none_match='"abc"')
+    amund.get_prompt("triage", cache_ttl=60)  # cache populated
+    with amund.run("agent"):
+        p = amund.get_prompt("triage", if_none_match='"abc"')
     assert p.not_modified is True
     assert _prompts_of_last_trace() == [FETCH_REF]
-    morse_ai.clear_prompt_cache()
-    with morse_ai.run("agent2"):
-        assert morse_ai.get_prompt("triage", if_none_match='"abc"').not_modified
+    amund.clear_prompt_cache()
+    with amund.run("agent2"):
+        assert amund.get_prompt("triage", if_none_match='"abc"').not_modified
     assert not _prompts_of_last_trace()
 
 
@@ -146,20 +146,20 @@ def test_304_links_via_cached_prompt_only():
 @respx.mock
 def test_dedupe_with_set_prompt_prefers_fetch():
     _route().mock(return_value=httpx.Response(200, json=BODY))
-    with morse_ai.run("agent"):
-        morse_ai.set_prompt("triage", 3)
-        morse_ai.get_prompt("triage")
+    with amund.run("agent"):
+        amund.set_prompt("triage", 3)
+        amund.get_prompt("triage")
     assert _prompts_of_last_trace() == [FETCH_REF]
-    with morse_ai.run("agent"):
-        morse_ai.get_prompt("triage")
-        morse_ai.set_prompt("triage", 3)
+    with amund.run("agent"):
+        amund.get_prompt("triage")
+        amund.set_prompt("triage", 3)
     assert _prompts_of_last_trace() == [FETCH_REF]
 
 
 @pytest.mark.req("UP-09")
 def test_set_prompt_ref_omits_link_source():
-    with morse_ai.run("agent"):
-        morse_ai.set_prompt("triage", 3)
+    with amund.run("agent"):
+        amund.set_prompt("triage", 3)
     assert _prompts_of_last_trace() == [{"name": "triage", "version": 3}]
 
 
@@ -171,20 +171,20 @@ def test_linking_never_raises(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(morse_ai, "link_fetched_prompt", boom)
-    with morse_ai.run("agent"):
-        assert morse_ai.get_prompt("triage").version == 3
+    monkeypatch.setattr(amund, "link_fetched_prompt", boom)
+    with amund.run("agent"):
+        assert amund.get_prompt("triage").version == 3
 
 
 @pytest.mark.req("UP-09")
 @respx.mock
 def test_one_info_log_per_process(caplog):
     _route().mock(return_value=httpx.Response(200, json=BODY))
-    with caplog.at_level(logging.INFO, logger="morse_ai"):
-        with morse_ai.run("a"):
-            morse_ai.get_prompt("triage")
-        with morse_ai.run("b"):
-            morse_ai.get_prompt("triage")
+    with caplog.at_level(logging.INFO, logger="amund"):
+        with amund.run("a"):
+            amund.get_prompt("triage")
+        with amund.run("b"):
+            amund.get_prompt("triage")
     msgs = [r.getMessage() for r in caplog.records if "link=False" in r.getMessage()]
     assert len(msgs) == 1
 

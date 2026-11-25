@@ -17,7 +17,7 @@ Issue 2 / Phase 12.5 follow-up: verify the LangGraphCallbackHandler
 
 These tests do NOT require langchain, langgraph, or opentelemetry to be
 installed — the W3C path is exercised by stubbing
-``morse_ai.adapters.langgraph._build_otel_traceparent``.
+``amund.adapters.langgraph._build_otel_traceparent``.
 """
 
 # ruff: noqa: E501, SIM117
@@ -29,13 +29,13 @@ from typing import Any
 
 import pytest
 
-from morse_ai import tracing
-from morse_ai.adapters import langgraph as langgraph_adapter
-from morse_ai.adapters.langgraph import (
+from amund import tracing
+from amund.adapters import langgraph as langgraph_adapter
+from amund.adapters.langgraph import (
     LangGraphCallbackHandler,
     _w3c_trace_id_to_uuid_hex,
 )
-from morse_ai.logging import _current_trace_context
+from amund.logging import _current_trace_context
 
 # ---------------------------------------------------------------------------
 # Mock helpers
@@ -312,7 +312,7 @@ def test_falls_back_when_otel_traceparent_malformed(
 
 @pytest.mark.req("SDK-09")
 def test_does_not_overwrite_existing_active_trace(monkeypatch: pytest.MonkeyPatch):
-    """If the caller wrapped the chain in `with morse_ai.run():`, the handler
+    """If the caller wrapped the chain in `with amund.run():`, the handler
     must NOT open a competing auto-trace — it inherits.
 
     This is the "user supplies their own trace context" path. Without this,
@@ -527,7 +527,7 @@ def test_bridge_does_not_break_logging_handler_attach_via_root_logger(
     Belt-and-suspenders for the end-to-end story — the failure mode this
     catches is the handler raising on missing trace context (it shouldn't).
     """
-    from morse_ai.logging import MorseHandler
+    from amund.logging import MorseHandler
 
     captured: list[dict[str, Any]] = []
 
@@ -536,7 +536,7 @@ def test_bridge_does_not_break_logging_handler_attach_via_root_logger(
 
     # Bypass the transport — capture payloads in-process.
     monkeypatch.setattr(
-        "morse_ai.logging._enqueue_log",
+        "amund.logging._enqueue_log",
         _fake_enqueue,
     )
     monkeypatch.setattr(
@@ -545,7 +545,7 @@ def test_bridge_does_not_break_logging_handler_attach_via_root_logger(
         lambda: _make_w3c_traceparent(W3C_EXAMPLE_TRACE_HEX),
     )
 
-    test_logger = stdlib_logging.getLogger("morse_ai.tests.bridge")
+    test_logger = stdlib_logging.getLogger("amund.tests.bridge")
     test_logger.setLevel(stdlib_logging.INFO)
     test_logger.addHandler(MorseHandler())
 

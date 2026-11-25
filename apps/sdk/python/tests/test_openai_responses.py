@@ -11,9 +11,9 @@ from typing import Any
 
 import pytest
 
-import morse_ai
-from morse_ai import tracing
-from morse_ai.adapters import openai as av_openai
+import amund
+from amund import tracing
+from amund.adapters import openai as av_openai
 
 
 def _responses_response(text: str = "hello there", function_calls: Any = ()) -> Any:
@@ -64,14 +64,14 @@ def _llm_spans() -> list[dict[str, Any]]:
 
 @pytest.fixture(autouse=True)
 def _reset():
-    from morse_ai.tracing import _active_trace
+    from amund.tracing import _active_trace
 
     _active_trace.set(None)
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
     av_openai.uninstall()
     yield
     _active_trace.set(None)
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
     av_openai.uninstall()
 
 

@@ -1,7 +1,7 @@
 """MHQ-1537 / MHQ-1506 — the zero-code import hook, run in a fresh interpreter.
 
 Each test runs a child Python so ``sys.modules`` starts clean: the import
-hook only matters for modules imported *after* ``morse_ai.init()``.
+hook only matters for modules imported *after* ``amund.init()``.
 """
 
 from __future__ import annotations
@@ -47,8 +47,8 @@ def test_langgraph_adapter_installs_inside_the_import_from_two_threads() -> None
     proc = _run(
         """
         import threading
-        import morse_ai
-        from morse_ai._internal import auto_detect
+        import amund
+        from amund._internal import auto_detect
 
         installs = []
         _real_install_one = auto_detect._install_one
@@ -58,7 +58,7 @@ def test_langgraph_adapter_installs_inside_the_import_from_two_threads() -> None
             return _real_install_one(path)
 
         auto_detect._install_one = recording_install_one
-        morse_ai.init()
+        amund.init()
 
         installed_at_return = {}
         barrier = threading.Barrier(2)
@@ -104,8 +104,8 @@ def test_langgraph_imported_before_init_installs_immediately() -> None:
     proc = _run(
         """
         from langgraph.graph import StateGraph  # noqa: F401
-        import langgraph, morse_ai
-        morse_ai.init()
+        import langgraph, amund
+        amund.init()
         print("INSTALLED", getattr(langgraph, "_morse_ai_installed", False))
         """
     )
@@ -118,8 +118,8 @@ def test_zero_code_setup_patches_raw_openai_imported_after_init() -> None:
     """``MORSE_API_KEY`` + ``init()`` now covers a raw OpenAI client."""
     proc = _run(
         """
-        import morse_ai
-        morse_ai.init()
+        import amund
+        amund.init()
         import openai
         from openai.resources.chat.completions import Completions
         from openai.resources.responses import Responses
@@ -142,7 +142,7 @@ def test_zero_code_setup_routes_strands(before_init: bool) -> None:
     imp = "import strands\nfrom strands import Agent  # noqa: F401\n"
     proc = _run(
         (imp if before_init else "")
-        + "import morse_ai\nmorse_ai.init()\n"
+        + "import amund\namund.init()\n"
         + ("" if before_init else imp)
         + "from strands.telemetry.tracer import get_tracer\n"
         + 'print("INSTALLED", getattr(strands, "_morse_ai_installed", False))\n'
@@ -161,7 +161,7 @@ def test_zero_code_setup_patches_google_genai(before_init: bool) -> None:
     imp = "from google import genai\n"
     proc = _run(
         (imp if before_init else "")
-        + "import morse_ai\nmorse_ai.init()\n"
+        + "import amund\namund.init()\n"
         + ("" if before_init else imp)
         + "from google.genai.models import AsyncModels, Models\n"
         + 'print("INSTALLED", getattr(genai, "_morse_ai_installed", False))\n'

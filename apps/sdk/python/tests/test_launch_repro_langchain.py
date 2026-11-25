@@ -20,10 +20,10 @@ from langchain_core.output_parsers import StrOutputParser  # noqa: E402
 from langchain_core.outputs import ChatGeneration, ChatResult  # noqa: E402
 from langchain_core.prompts import ChatPromptTemplate  # noqa: E402
 
-from morse_ai import tracing  # noqa: E402
-from morse_ai._internal.redaction import RedactionConfig  # noqa: E402
-from morse_ai.adapters.langchain import MorseCallbackHandler  # noqa: E402
-from morse_ai.otel_provider import get_engine  # noqa: E402
+from amund import tracing  # noqa: E402
+from amund._internal.redaction import RedactionConfig  # noqa: E402
+from amund.adapters.langchain import MorseCallbackHandler  # noqa: E402
+from amund.otel_provider import get_engine  # noqa: E402
 
 
 class _FakeChat(BaseChatModel):

@@ -10,8 +10,8 @@ import uuid
 
 import pytest
 
-from morse_ai import tracing
-from morse_ai.adapters.langchain import MorseCallbackHandler
+from amund import tracing
+from amund.adapters.langchain import MorseCallbackHandler
 
 # ---------------------------------------------------------------------------
 # Mock helpers

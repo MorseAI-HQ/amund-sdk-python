@@ -12,13 +12,13 @@ from typing import Any
 
 import pytest
 
-from morse_ai import tracing
-from morse_ai._internal.redaction import RedactionConfig
-from morse_ai._internal.span_ids import otel_span_id_for
-from morse_ai.adapters import anthropic as av_anthropic
-from morse_ai.adapters import openai as av_openai
-from morse_ai.adapters.langchain import MorseCallbackHandler
-from morse_ai.otel_provider import get_engine
+from amund import tracing
+from amund._internal.redaction import RedactionConfig
+from amund._internal.span_ids import otel_span_id_for
+from amund.adapters import anthropic as av_anthropic
+from amund.adapters import openai as av_openai
+from amund.adapters.langchain import MorseCallbackHandler
+from amund.otel_provider import get_engine
 
 pytestmark = pytest.mark.req("MHQ-1880")
 
@@ -371,9 +371,9 @@ def test_wrap_kwarg_opt_out_sends_no_header(engine):
 
 
 def test_init_opt_out_sends_no_header(engine):
-    import morse_ai
+    import amund
 
-    morse_ai.init("mhq_test", propagate_trace_context=False)  # pragma: allowlist secret
+    amund.init("mhq_test", propagate_trace_context=False)  # pragma: allowlist secret
     try:
         # init() may install the global patch, and then wrap() returns the
         # client untouched, so assert on the fake itself.
@@ -383,7 +383,7 @@ def test_init_opt_out_sends_no_header(engine):
             client.messages.create(model="m", messages=[])
         assert "extra_headers" not in fake.messages.calls[0]
     finally:
-        morse_ai._reset_for_testing()
+        amund._reset_for_testing()
 
 
 def test_no_active_trace_on_stream_sends_no_header():
@@ -394,7 +394,7 @@ def test_no_active_trace_on_stream_sends_no_header():
 
 
 def test_prepare_llm_call_no_trace_returns_inputs_unchanged():
-    from morse_ai.propagation import prepare_llm_call
+    from amund.propagation import prepare_llm_call
 
     kwargs = {"model": "m"}
     out, span_id = prepare_llm_call(kwargs, own_span=True)

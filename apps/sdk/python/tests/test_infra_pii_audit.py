@@ -18,11 +18,11 @@ import httpx
 import pytest
 import requests
 
-from morse_ai import infra_capture as ic
-from morse_ai import queue_capture as qc
-from morse_ai._internal.redaction import RedactionConfig
-from morse_ai.otel_provider import emit_trace_entry, get_engine
-from morse_ai.tracing import _get_last_trace, run
+from amund import infra_capture as ic
+from amund import queue_capture as qc
+from amund._internal.redaction import RedactionConfig
+from amund.otel_provider import emit_trace_entry, get_engine
+from amund.tracing import _get_last_trace, run
 
 celery = pytest.importorskip("celery")
 boto3 = pytest.importorskip("boto3")

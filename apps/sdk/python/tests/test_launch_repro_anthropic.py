@@ -19,8 +19,8 @@ from typing import Any
 
 import pytest
 
-from morse_ai import tracing
-from morse_ai.adapters import anthropic as av_anthropic
+from amund import tracing
+from amund.adapters import anthropic as av_anthropic
 
 _MODEL = "claude-haiku-4-5-20251001"
 _KW = {
@@ -107,7 +107,7 @@ def test_mhq1415_langchain_anthropic_with_init_and_handler_one_span_per_call(ins
     httpx = pytest.importorskip("httpx")
     from langchain_anthropic import ChatAnthropic
 
-    from morse_ai.adapters.langchain import MorseCallbackHandler
+    from amund.adapters.langchain import MorseCallbackHandler
 
     with respx.mock(assert_all_called=False) as mock:
         mock.post("https://api.anthropic.com/v1/messages").mock(
@@ -141,7 +141,7 @@ def test_mhq1414_langchain_cache_write_tokens_reach_the_span():
     from langchain_core.messages import AIMessage
     from langchain_core.outputs import ChatGeneration, ChatResult
 
-    from morse_ai.adapters.langchain import MorseCallbackHandler
+    from amund.adapters.langchain import MorseCallbackHandler
 
     class _CacheWriteChat(BaseChatModel):
         @property

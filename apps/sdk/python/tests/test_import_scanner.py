@@ -1,11 +1,11 @@
-"""Tests for morse_ai.instrumentation.imports."""
+"""Tests for amund.instrumentation.imports."""
 
 import sys
 import types
 
 import pytest
 
-from morse_ai.instrumentation.imports import (
+from amund.instrumentation.imports import (
     AVImportWatcher,
     install_import_watcher,
     scan_imported_libraries,
@@ -64,7 +64,7 @@ class TestAVImportWatcher:
 
         install_import_watcher(cb)
 
-        from morse_ai.instrumentation.imports import _watcher_instance
+        from amund.instrumentation.imports import _watcher_instance
 
         assert _watcher_instance is not None
         # Reset seen set so the callback fires for this test.
@@ -77,7 +77,7 @@ class TestAVImportWatcher:
         fired: list[str] = []
         install_import_watcher(lambda lib, _v: fired.append(lib))
 
-        from morse_ai.instrumentation.imports import _watcher_instance
+        from amund.instrumentation.imports import _watcher_instance
 
         assert _watcher_instance is not None
         _watcher_instance._seen.discard("asyncpg")
@@ -89,7 +89,7 @@ class TestAVImportWatcher:
 
     def test_find_spec_always_returns_none(self):
         install_import_watcher(lambda lib, v: None)
-        from morse_ai.instrumentation.imports import _watcher_instance
+        from amund.instrumentation.imports import _watcher_instance
 
         assert _watcher_instance is not None
         result = _watcher_instance.find_spec("asyncpg", None)
@@ -98,7 +98,7 @@ class TestAVImportWatcher:
     def test_non_tracked_module_ignored(self):
         fired: list[str] = []
         install_import_watcher(lambda lib, _v: fired.append(lib))
-        from morse_ai.instrumentation.imports import _watcher_instance
+        from amund.instrumentation.imports import _watcher_instance
 
         assert _watcher_instance is not None
         _watcher_instance.find_spec("some_random_lib_xyz", None)

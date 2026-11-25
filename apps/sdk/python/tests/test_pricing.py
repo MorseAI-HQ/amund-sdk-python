@@ -2,7 +2,7 @@
 
 import pytest
 
-from morse_ai.pricing import calculate_cost, get_model_pricing
+from amund.pricing import calculate_cost, get_model_pricing
 
 
 class TestPricing:

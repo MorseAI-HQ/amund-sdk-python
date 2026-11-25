@@ -15,21 +15,21 @@ from __future__ import annotations
 
 import pytest
 
-import morse_ai
-from morse_ai import tracing as _tracing
+import amund
+from amund import tracing as _tracing
 
 
 def setup_function() -> None:
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
 
 
 def teardown_function() -> None:
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
 
 
 def _emit_one_trace() -> dict:
     """Run a no-op traced agent and return the captured trace payload."""
-    with morse_ai.run("source-test-agent") as r:
+    with amund.run("source-test-agent") as r:
         r.set_outcome(success=True)
     payload = _tracing._get_last_trace()
     assert payload is not None, "tracing module didn't capture the trace"
@@ -50,7 +50,7 @@ def test_env_var_emits_morse_ai_source_resource_attr(
     monkeypatch.setenv("MORSE_INTERNAL_SOURCE", "copilot")
 
     # Trigger lazy init through any public function.
-    morse_ai._ensure_initialized()
+    amund._ensure_initialized()
     payload = _emit_one_trace()
 
     # Keyed lookup, not exact-dict equality: MHQ-668 added an independent
@@ -66,7 +66,7 @@ def test_env_var_accepts_all_whitelisted_values(
     """Every accepted value round-trips into the resource attr."""
     monkeypatch.setenv("MORSE_API_KEY", "av_env_test")
     monkeypatch.setenv("MORSE_INTERNAL_SOURCE", value)
-    morse_ai._ensure_initialized()
+    amund._ensure_initialized()
     payload = _emit_one_trace()
     assert payload.get("resource", {}).get("morse_ai.source") == value
 
@@ -85,7 +85,7 @@ def test_env_var_invalid_value_is_silently_dropped(
     """A typo or unknown value MUST NOT tag the trace — absence wins."""
     monkeypatch.setenv("MORSE_API_KEY", "av_env_test")
     monkeypatch.setenv("MORSE_INTERNAL_SOURCE", "co-pilot")  # typo
-    morse_ai._ensure_initialized()
+    amund._ensure_initialized()
     payload = _emit_one_trace()
     assert "resource" not in payload
 
@@ -100,7 +100,7 @@ def test_init_kwarg_emits_source(monkeypatch: pytest.MonkeyPatch) -> None:
     """`init(source="investigator")` tags traces even without env."""
     monkeypatch.delenv("MORSE_INTERNAL_SOURCE", raising=False)
     fake_key = "av_kw_test"  # pragma: allowlist secret
-    morse_ai.init(api_key=fake_key, source="investigator")
+    amund.init(api_key=fake_key, source="investigator")
     payload = _emit_one_trace()
     assert payload.get("resource", {}).get("morse_ai.source") == "investigator"
 
@@ -110,7 +110,7 @@ def test_init_kwarg_wins_over_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Kwarg takes precedence — env loses when both are set."""
     monkeypatch.setenv("MORSE_INTERNAL_SOURCE", "copilot")
     fake_key = "av_kw_test"  # pragma: allowlist secret
-    morse_ai.init(api_key=fake_key, source="investigator")
+    amund.init(api_key=fake_key, source="investigator")
     payload = _emit_one_trace()
     assert payload.get("resource", {}).get("morse_ai.source") == "investigator"
 
@@ -128,7 +128,7 @@ def test_init_kwarg_invalid_value_drops_to_no_source(
     through to env (which would mask the typo)."""
     monkeypatch.setenv("MORSE_INTERNAL_SOURCE", "copilot")
     fake_key = "av_kw_test"  # pragma: allowlist secret
-    morse_ai.init(api_key=fake_key, source="bogus")
+    amund.init(api_key=fake_key, source="bogus")
     payload = _emit_one_trace()
     # Explicit invalid kwarg shadows env to None — typo is visible, not hidden.
     assert "resource" not in payload
@@ -155,7 +155,7 @@ def test_no_env_no_kwarg_omits_resource_block(
     """Customer integrations (no env, no kwarg) must have NO resource block."""
     monkeypatch.delenv("MORSE_INTERNAL_SOURCE", raising=False)
     fake_key = "av_cust_test"  # pragma: allowlist secret
-    morse_ai.init(api_key=fake_key)
+    amund.init(api_key=fake_key)
     payload = _emit_one_trace()
     assert "resource" not in payload
 
@@ -171,16 +171,16 @@ def test_run_source_kwarg_overrides_process_source(
 ) -> None:
     """`run(..., source="investigator")` overrides the process-level tag."""
     fake_key = "av_proc_test"  # pragma: allowlist secret
-    morse_ai.init(api_key=fake_key, source="copilot")
+    amund.init(api_key=fake_key, source="copilot")
 
-    with morse_ai.run("investigator-trace", source="investigator") as r:
+    with amund.run("investigator-trace", source="investigator") as r:
         r.set_outcome(success=True)
     payload = _tracing._get_last_trace()
     assert payload is not None
     assert payload.get("resource", {}).get("morse_ai.source") == "investigator"
 
     # Without the override, the next trace falls back to the process source.
-    with morse_ai.run("copilot-trace") as r:
+    with amund.run("copilot-trace") as r:
         r.set_outcome(success=True)
     payload = _tracing._get_last_trace()
     assert payload is not None
@@ -193,8 +193,8 @@ def test_run_source_invalid_value_falls_back_to_process(
 ) -> None:
     """Invalid per-trace `source` is dropped; process-level value survives."""
     fake_key = "av_proc_test"  # pragma: allowlist secret
-    morse_ai.init(api_key=fake_key, source="copilot")
-    with morse_ai.run("bad-override", source="not-real") as r:
+    amund.init(api_key=fake_key, source="copilot")
+    with amund.run("bad-override", source="not-real") as r:
         r.set_outcome(success=True)
     payload = _tracing._get_last_trace()
     assert payload is not None

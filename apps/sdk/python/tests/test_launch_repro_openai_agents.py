@@ -2,7 +2,7 @@
 
 ``test_openai_agents_failures.py`` drives fake ``Model`` objects. These tests
 run the docs Quickstart verbatim instead: an ``Agent`` with no ``model=``,
-a bare ``Runner`` (no ``morse_ai.run()``), and the stock OpenAI Responses
+a bare ``Runner`` (no ``amund.run()``), and the stock OpenAI Responses
 model, with the HTTP layer replaced by ``httpx.MockTransport`` (recorded
 response shapes, no network, no key).
 
@@ -29,10 +29,10 @@ from agents import (  # noqa: E402
     set_tracing_disabled,
 )
 
-import morse_ai  # noqa: E402
-from morse_ai import tracing  # noqa: E402
-from morse_ai.adapters import openai_agents as adapter  # noqa: E402
-from morse_ai.tracing import _active_trace  # noqa: E402
+import amund  # noqa: E402
+from amund import tracing  # noqa: E402
+from amund.adapters import openai_agents as adapter  # noqa: E402
+from amund.tracing import _active_trace  # noqa: E402
 
 set_tracing_disabled(True)
 
@@ -82,13 +82,13 @@ def _client(handler) -> openai.AsyncOpenAI:  # noqa: ANN001
 @pytest.fixture(autouse=True)
 def _installed(monkeypatch):
     monkeypatch.delenv("OPENAI_DEFAULT_MODEL", raising=False)
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
     adapter.uninstall()
     adapter.install()
     set_default_openai_api("responses")
     yield
     _active_trace.set(None)
-    morse_ai._reset_for_testing()
+    amund._reset_for_testing()
     adapter.uninstall()
 
 

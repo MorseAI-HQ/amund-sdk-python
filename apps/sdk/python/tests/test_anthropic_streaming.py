@@ -19,14 +19,14 @@ from typing import Any
 
 import pytest
 
-from morse_ai.adapters import anthropic as av_anthropic
-from morse_ai.spans import SpanType
+from amund.adapters import anthropic as av_anthropic
+from amund.spans import SpanType
 
 
 @pytest.fixture
 def captured_traces():
     """Capture finished trace entries (same shape as test_anthropic_wrap)."""
-    from morse_ai import tracing as _tracing
+    from amund import tracing as _tracing
 
     captured: list[dict[str, Any]] = []
     original = _tracing._finish_trace

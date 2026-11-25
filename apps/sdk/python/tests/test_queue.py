@@ -1,6 +1,6 @@
 """Tests for TelemetryQueue."""
 
-from morse_ai.queue import SHUTDOWN, TelemetryQueue
+from amund.queue import SHUTDOWN, TelemetryQueue
 
 
 class TestTelemetryQueue:

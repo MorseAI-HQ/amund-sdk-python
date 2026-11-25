@@ -18,13 +18,13 @@ import sqlite3
 import httpx
 import pytest
 
-from morse_ai.infra_capture import (
+from amund.infra_capture import (
     disable_db_capture,
     disable_http_capture,
     enable_db_capture,
     enable_http_capture,
 )
-from morse_ai.tracing import _get_last_trace, run
+from amund.tracing import _get_last_trace, run
 
 
 @pytest.fixture(autouse=True)

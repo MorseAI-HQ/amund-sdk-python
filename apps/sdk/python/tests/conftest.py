@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,18 @@ import pytest
 
 # Ensure src is on path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_amund_env(monkeypatch):
+    """Drop any ``AMUND_*`` variables inherited from the developer's shell.
+
+    ``AMUND_<NAME>`` outranks ``MORSE_<NAME>`` (see ``amund._internal.env``),
+    so a stray ``AMUND_API_KEY`` or ``AMUND_ENDPOINT`` in the environment would
+    silently override every test that sets or clears the ``MORSE_`` name.
+    """
+    for name in [k for k in os.environ if k.startswith("AMUND_")]:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -27,7 +40,7 @@ def _dead_default_endpoint(request, monkeypatch):
         monkeypatch.setenv("MORSE_ENDPOINT", "http://localhost:0")
     else:
         monkeypatch.delenv("MORSE_ENDPOINT", raising=False)
-        monkeypatch.setattr("morse_ai._flush_dependencies_async", lambda client: None)
+        monkeypatch.setattr("amund._flush_dependencies_async", lambda client: None)
 
 
 @pytest.fixture

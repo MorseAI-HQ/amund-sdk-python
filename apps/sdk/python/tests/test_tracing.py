@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from morse_ai.spans import SpanData, SpanType
+from amund.spans import SpanData, SpanType
 
 
 class TestSpanType:
@@ -122,7 +122,7 @@ class TestSpanData:
 
 class TestTraceAgent:
     def test_decorator_calls_function(self):
-        from morse_ai.tracing import trace_agent
+        from amund.tracing import trace_agent
 
         called = []
 
@@ -136,7 +136,7 @@ class TestTraceAgent:
         assert called == [True]
 
     def test_decorator_with_name(self):
-        from morse_ai.tracing import trace_agent
+        from amund.tracing import trace_agent
 
         called = []
 
@@ -150,7 +150,7 @@ class TestTraceAgent:
         assert called == [True]
 
     def test_decorator_preserves_function_name(self):
-        from morse_ai.tracing import trace_agent
+        from amund.tracing import trace_agent
 
         @trace_agent
         def my_named_function():
@@ -159,7 +159,7 @@ class TestTraceAgent:
         assert my_named_function.__name__ == "my_named_function"
 
     def test_decorator_creates_agent_root_span(self):
-        from morse_ai.tracing import _get_last_trace, trace_agent
+        from amund.tracing import _get_last_trace, trace_agent
 
         @trace_agent
         def my_agent():
@@ -173,7 +173,7 @@ class TestTraceAgent:
         assert root_span["type"] == "agent"
 
     def test_decorator_auto_times_span(self):
-        from morse_ai.tracing import _get_last_trace, trace_agent
+        from amund.tracing import _get_last_trace, trace_agent
 
         @trace_agent
         def my_agent():
@@ -187,7 +187,7 @@ class TestTraceAgent:
         assert root_span["duration_ms"] >= 10
 
     def test_decorator_sets_failed_status_on_exception(self):
-        from morse_ai.tracing import _get_last_trace, trace_agent
+        from amund.tracing import _get_last_trace, trace_agent
 
         @trace_agent
         def bad_agent():
@@ -202,7 +202,7 @@ class TestTraceAgent:
         assert "something went wrong" in root_span.get("error_message", "")
 
     def test_decorator_generates_unique_trace_ids(self):
-        from morse_ai.tracing import _get_last_trace, trace_agent
+        from amund.tracing import _get_last_trace, trace_agent
 
         @trace_agent
         def my_agent():
@@ -220,7 +220,7 @@ class TestTraceAgent:
         (not BatchTransport.track()) — verify via the semantic surface,
         ``_get_last_trace()``, rather than the retired wire-transport mock.
         """
-        from morse_ai.tracing import _get_last_trace, trace_agent
+        from amund.tracing import _get_last_trace, trace_agent
 
         @trace_agent
         def my_agent():
@@ -232,7 +232,7 @@ class TestTraceAgent:
     def test_decorator_legacy_transport_escape_hatch(self, monkeypatch):
         """MORSE_LEGACY_TRANSPORT=1 reverts trace_agent to the pre-MHQ-668
         JSON BatchTransport.track() path (rollback escape hatch)."""
-        from morse_ai.tracing import _set_transport, trace_agent
+        from amund.tracing import _set_transport, trace_agent
 
         monkeypatch.setenv("MORSE_LEGACY_TRANSPORT", "1")
         mock_transport = MagicMock()
@@ -254,7 +254,7 @@ class TestTraceAgent:
         """MHQ-1157: @trace_agent has no outcome API, so it must not send
         ``success`` — the server reads any success as a developer-declared
         outcome and stamps provenance='developer' on a NULL outcome."""
-        from morse_ai.tracing import _get_last_trace, trace_agent
+        from amund.tracing import _get_last_trace, trace_agent
 
         @trace_agent
         def good_agent():
@@ -268,7 +268,7 @@ class TestTraceAgent:
 
     @pytest.mark.req("MHQ-1157")
     def test_decorator_raise_records_failure_same_as_run(self):
-        from morse_ai.tracing import _get_last_trace, trace_agent
+        from amund.tracing import _get_last_trace, trace_agent
 
         @trace_agent
         def bad_agent():
@@ -285,8 +285,8 @@ class TestTraceAgent:
     @pytest.mark.req("MHQ-1157")
     def test_decorator_emits_no_outcome_attribute_on_the_wire(self):
         """What the server keys provenance on: morse.outcome.success."""
-        from morse_ai.otel_provider import _span_dict_to_otel_attributes
-        from morse_ai.tracing import _get_last_trace, run, trace_agent
+        from amund.otel_provider import _span_dict_to_otel_attributes
+        from amund.tracing import _get_last_trace, run, trace_agent
 
         @trace_agent
         def good_agent():
@@ -304,7 +304,7 @@ class TestTraceAgent:
         assert "morse.outcome.success" not in attrs
         assert "morse.outcome.label" not in attrs
 
-        # Contrast: an explicit outcome via morse_ai.run still declares it.
+        # Contrast: an explicit outcome via amund.run still declares it.
         with run("my-agent") as r:
             r.set_outcome(success=True, outcome="qualified")
         t = _get_last_trace()
@@ -321,13 +321,13 @@ class TestTraceAgent:
 
 class TestRunContextManager:
     def test_run_as_context_manager(self):
-        from morse_ai.tracing import run
+        from amund.tracing import run
 
         with run("my-agent") as r:
             assert r is not None
 
     def test_run_set_outcome(self):
-        from morse_ai.tracing import _get_last_trace, run
+        from amund.tracing import _get_last_trace, run
 
         with run("my-agent") as r:
             r.set_outcome(success=True, outcome="qualified")
@@ -337,7 +337,7 @@ class TestRunContextManager:
         assert trace["trace"]["outcome"] == "qualified"
 
     def test_run_set_error(self):
-        from morse_ai.tracing import _get_last_trace, run
+        from amund.tracing import _get_last_trace, run
 
         with run("my-agent") as r:
             r.set_error("custom error message")
@@ -346,7 +346,7 @@ class TestRunContextManager:
         assert trace["trace"]["status"] == "failed"
 
     def test_run_sets_failed_on_exception(self):
-        from morse_ai.tracing import _get_last_trace, run
+        from amund.tracing import _get_last_trace, run
 
         with pytest.raises(RuntimeError), run("my-agent"):
             raise RuntimeError("test error")
@@ -358,7 +358,7 @@ class TestRunContextManager:
 
     @pytest.mark.req("MHQ-1157")
     def test_run_never_guesses_an_outcome_on_clean_exit(self):
-        from morse_ai.tracing import _get_last_trace, run
+        from amund.tracing import _get_last_trace, run
 
         with run("my-agent"):
             pass
@@ -369,7 +369,7 @@ class TestRunContextManager:
 
     @pytest.mark.req("MHQ-1157")
     def test_run_exception_records_failure(self):
-        from morse_ai.tracing import _get_last_trace, run
+        from amund.tracing import _get_last_trace, run
 
         with pytest.raises(RuntimeError), run("my-agent"):
             raise RuntimeError("blew up")
@@ -380,29 +380,29 @@ class TestRunContextManager:
 
     @pytest.mark.req("MHQ-1157")
     def test_module_set_outcome_works_in_run_and_trace_agent(self):
-        import morse_ai
-        from morse_ai.tracing import _get_last_trace, run, trace_agent
+        import amund
+        from amund.tracing import _get_last_trace, run, trace_agent
 
         with run("my-agent"):
-            morse_ai.set_outcome(True, outcome="qualified")
+            amund.set_outcome(True, outcome="qualified")
         t = _get_last_trace()["trace"]
         assert (t["success"], t["outcome"]) == (True, "qualified")
 
         @trace_agent
         def agent():
-            morse_ai.set_outcome(False, outcome="rejected")
+            amund.set_outcome(False, outcome="rejected")
 
         agent()
         t = _get_last_trace()["trace"]
         assert (t["success"], t["outcome"]) == (False, "rejected")
 
     def test_module_set_outcome_without_open_trace_is_noop(self):
-        import morse_ai
+        import amund
 
-        morse_ai.set_outcome(True)  # must not raise
+        amund.set_outcome(True)  # must not raise
 
     def test_run_explicit_set_outcome_overrides_inference(self):
-        from morse_ai.tracing import _get_last_trace, run
+        from amund.tracing import _get_last_trace, run
 
         # An exception still propagates, but the caller declared success
         # via set_outcome before raising — inference must not clobber it.
@@ -415,7 +415,7 @@ class TestRunContextManager:
         assert trace["trace"]["outcome"] == "partial"
 
     def test_run_creates_agent_root_span(self):
-        from morse_ai.tracing import _get_last_trace, run
+        from amund.tracing import _get_last_trace, run
 
         with run("my-agent"):
             pass
@@ -430,7 +430,7 @@ class TestRunContextManager:
     def test_run_emits_trace(self):
         """MHQ-668: run()'s primary emission path is real OTel spans (not
         BatchTransport.track()) — verify via ``_get_last_trace()``."""
-        from morse_ai.tracing import _get_last_trace, run
+        from amund.tracing import _get_last_trace, run
 
         with run("my-agent"):
             pass
@@ -439,7 +439,7 @@ class TestRunContextManager:
     def test_run_legacy_transport_escape_hatch(self, monkeypatch):
         """MORSE_LEGACY_TRANSPORT=1 reverts run() to the pre-MHQ-668 JSON
         BatchTransport.track() path (rollback escape hatch)."""
-        from morse_ai.tracing import _set_transport, run
+        from amund.tracing import _set_transport, run
 
         monkeypatch.setenv("MORSE_LEGACY_TRANSPORT", "1")
         mock_transport = MagicMock()
@@ -456,7 +456,7 @@ class TestRunContextManager:
         """``_get_last_trace()``'s dict shape is unchanged by MHQ-668 —
         {"trace": {...}, "spans": [...]} — even though the wire mechanism
         underneath (real OTel/OTLP) is entirely new."""
-        from morse_ai.tracing import _get_last_trace, run
+        from amund.tracing import _get_last_trace, run
 
         with run("my-agent") as r:
             r.set_outcome(success=True, outcome="ok")
@@ -469,7 +469,7 @@ class TestRunContextManager:
 
 class TestSpanContextManager:
     def test_span_inside_run(self):
-        from morse_ai.tracing import _get_last_trace, run, span
+        from amund.tracing import _get_last_trace, run, span
 
         with run("my-agent"), span("tool-call", span_type="tool"):
             pass
@@ -479,7 +479,7 @@ class TestSpanContextManager:
         assert "tool-call" in span_names
 
     def test_span_type_is_set(self):
-        from morse_ai.tracing import _get_last_trace, run, span
+        from amund.tracing import _get_last_trace, run, span
 
         with run("my-agent"), span("db-query", span_type="db"):
             pass
@@ -489,7 +489,7 @@ class TestSpanContextManager:
         assert db_span["type"] == "db"
 
     def test_span_default_type_is_custom(self):
-        from morse_ai.tracing import _get_last_trace, run, span
+        from amund.tracing import _get_last_trace, run, span
 
         with run("my-agent"), span("my-span"):
             pass
@@ -499,7 +499,7 @@ class TestSpanContextManager:
         assert my_span["type"] == "custom"
 
     def test_span_has_parent_span_id(self):
-        from morse_ai.tracing import _get_last_trace, run, span
+        from amund.tracing import _get_last_trace, run, span
 
         with run("my-agent"), span("child-span"):
             pass
@@ -510,7 +510,7 @@ class TestSpanContextManager:
         assert child_span["parent_span_id"] == root_span["span_id"]
 
     def test_nested_spans_correct_parent_chain(self):
-        from morse_ai.tracing import _get_last_trace, run, span
+        from amund.tracing import _get_last_trace, run, span
 
         with run("my-agent"), span("parent-span"), span("child-span"):
             with span("grandchild-span"):
@@ -537,7 +537,7 @@ class TestSpanContextManager:
         assert grandchild["parent_span_id"] == child["span_id"]
 
     def test_span_auto_times(self):
-        from morse_ai.tracing import _get_last_trace, run, span
+        from amund.tracing import _get_last_trace, run, span
 
         with run("my-agent"), span("slow-span"):
             time.sleep(0.01)
@@ -548,14 +548,14 @@ class TestSpanContextManager:
         assert timed_span["duration_ms"] >= 10
 
     def test_span_outside_trace_is_noop(self):
-        from morse_ai.tracing import span
+        from amund.tracing import span
 
         # Should not raise — silent no-op when no active trace context
         with span("orphan-span"):
             pass  # No exception expected
 
     def test_span_inside_trace_agent(self):
-        from morse_ai.tracing import _get_last_trace, span, trace_agent
+        from amund.tracing import _get_last_trace, span, trace_agent
 
         @trace_agent
         def my_agent():

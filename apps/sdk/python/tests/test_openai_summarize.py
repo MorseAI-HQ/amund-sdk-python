@@ -21,13 +21,13 @@ from typing import Any
 
 import pytest
 
-from morse_ai.adapters import openai as av_openai
-from morse_ai.adapters.openai import (
+from amund.adapters import openai as av_openai
+from amund.adapters.openai import (
     _record_llm_span_for_response,
     _summarize_mode,
 )
-from morse_ai.spans import SpanType
-from morse_ai.tracing import run
+from amund.spans import SpanType
+from amund.tracing import run
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -81,7 +81,7 @@ def captured_traces():
     ``{"traces": [entry]}`` capture shape so ``_spans_of()`` below and the
     rest of this file's assertions need no changes.
     """
-    from morse_ai import tracing as _tracing
+    from amund import tracing as _tracing
 
     captured: list[dict[str, Any]] = []
     original = _tracing._finish_trace

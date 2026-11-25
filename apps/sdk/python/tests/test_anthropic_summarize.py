@@ -23,13 +23,13 @@ from typing import Any
 
 import pytest
 
-from morse_ai.adapters import anthropic as av_anthropic
-from morse_ai.adapters.anthropic import (
+from amund.adapters import anthropic as av_anthropic
+from amund.adapters.anthropic import (
     _record_llm_span_for_response,
     _summarize_mode,
 )
-from morse_ai.spans import SpanType
-from morse_ai.tracing import run
+from amund.spans import SpanType
+from amund.tracing import run
 
 # ---------------------------------------------------------------------------
 # Fixtures + helpers
@@ -79,7 +79,7 @@ def captured_traces():
     ``{"traces": [entry]}`` capture shape so ``_spans_of()`` below and the
     rest of this file's assertions need no changes.
     """
-    from morse_ai import tracing as _tracing
+    from amund import tracing as _tracing
 
     captured: list[dict[str, Any]] = []
     original = _tracing._finish_trace
@@ -207,7 +207,7 @@ def test_summarize_default_is_false():
 
 
 def test_summarize_no_op_outside_active_trace(captured_traces):
-    """summarize() inside no `morse_ai.run` must NOT crash + must emit nothing."""
+    """summarize() inside no `amund.run` must NOT crash + must emit nothing."""
     with av_anthropic.summarize():
         # No active trace state — recorder silently drops.
         _record_llm_span_for_response(
