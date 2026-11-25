@@ -25,7 +25,9 @@ def test_otel_instrumentation_scope_name_unchanged():
 
 
 def test_default_endpoint_host_unchanged():
-    assert client._DEFAULT_ENDPOINT == "https://api.morseai.dev/api/v1/traces/batch"
+    # The rename leaves the default endpoint alone: it is the one set by the
+    # api.amundai.com change (0.9.1rc1), and api.morseai.dev stays a prod alias.
+    assert client._DEFAULT_ENDPOINT == "https://api.amundai.com/api/v1/traces/batch"
 
 
 @pytest.mark.parametrize(
