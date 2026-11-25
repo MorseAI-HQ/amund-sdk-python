@@ -75,11 +75,20 @@ def get_api_key() -> str | None:
 
 _INGEST_PATH = "/api/v1/traces/batch"
 
+# Production API host. api.amundai.com is the default since 0.9.1;
+# api.morseai.dev (the default from 0.8.1 to 0.9.0) is a permanent alias for the
+# same service, so an explicit MORSE_ENDPOINT pinned to it keeps working.
+DEFAULT_API_HOST = "api.amundai.com"
+DEFAULT_ENDPOINT = f"https://{DEFAULT_API_HOST}{_INGEST_PATH}"
+# Every host that serves the production API. Used where the SDK has to recognise
+# its own backend (HTTP auto-capture never traces the SDK's own POSTs).
+PROD_API_HOSTS: frozenset[str] = frozenset({"api.amundai.com", "api.morseai.dev"})
+
 
 def get_endpoint() -> str | None:
     """Return the resolved ingest URL from MORSE_ENDPOINT, or None if unset.
 
-    Accepts either a bare base URL (https://api.morseai.dev) or the full
+    Accepts either a bare base URL (https://api.amundai.com) or the full
     ingest URL — both resolve to the same endpoint.
     """
     value = os.environ.get("MORSE_ENDPOINT", "").strip()

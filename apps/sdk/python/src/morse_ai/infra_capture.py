@@ -36,6 +36,7 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
+from morse_ai._internal.env import PROD_API_HOSTS
 from morse_ai.spans import SpanData, SpanType
 from morse_ai.tracing import get_active_trace, span
 
@@ -576,6 +577,9 @@ _DEFAULT_EXCLUDED_HOSTS = {
     # adapter span, so capturing them gives honest `hf` (unpriced) visibility.
     "router.huggingface.co",
     "api-inference.huggingface.co",
+    # The production API under every host that serves it (default + alias), so
+    # the SDK's own POSTs never self-trace even when MORSE_ENDPOINT is unset.
+    *PROD_API_HOSTS,
 }
 _excluded_hosts: set[str] = set(_DEFAULT_EXCLUDED_HOSTS)
 _http_originals: dict[str, Any] = {}

@@ -150,10 +150,19 @@ def test_record_emits_v2_trace_not_runs():
 
 @pytest.mark.real_default_endpoint
 def test_default_endpoint_is_railway_prod():
-    """The default endpoint is the morseai.dev prod API."""
+    """The default endpoint is the prod API on api.amundai.com."""
     morse_ai.init(api_key="av_default_endpoint_test")
     assert morse_ai._client is not None
-    assert "api.morseai.dev" in morse_ai._client.endpoint
+    assert morse_ai._client.endpoint == "https://api.amundai.com/api/v1/traces/batch"
+
+
+@pytest.mark.real_default_endpoint  # no dependency-scan POST to the prod host
+def test_morseai_dev_endpoint_still_accepted(monkeypatch):
+    """api.morseai.dev stays a supported alias: pinning it is used as given."""
+    monkeypatch.setenv("MORSE_ENDPOINT", "https://api.morseai.dev")
+    morse_ai.init(api_key="av_alias_endpoint_test")  # pragma: allowlist secret
+    assert morse_ai._client is not None
+    assert morse_ai._client.endpoint == "https://api.morseai.dev/api/v1/traces/batch"
 
 
 def test_explicit_endpoint_overrides_default():

@@ -33,7 +33,7 @@ from morse_ai.transport import BatchTransport
 
 logger = logging.getLogger("morse_ai")
 
-_DEFAULT_ENDPOINT = "https://api.morseai.dev/api/v1/traces/batch"
+_DEFAULT_ENDPOINT = _env.DEFAULT_ENDPOINT
 _OTLP_TRACES_PATH = "/api/v1/otlp/v1/traces"
 
 
