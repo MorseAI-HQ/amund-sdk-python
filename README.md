@@ -19,6 +19,10 @@ with amund.run("lead-qualifier") as r:
     r.set_outcome(True, "qualified")
 ```
 
+Using Claude Code, Cursor or Codex? [Set up with a coding agent](https://docs.amundai.com/start/coding-agent):
+your agent reads the [setup skill](https://docs.amundai.com/skills/amund-setup/SKILL.md) and does the
+instrumenting for you.
+
 > **Coming from `morse-ai`?** Morse is now Amund. `morse-ai` still installs and `import morse_ai`
 > still works (it is now a compatibility shim over `amund`), and `MORSE_*` environment variables
 > are still read. See [Migrating from morse-ai](apps/sdk/python/README.md#migrating-from-morse-ai).
