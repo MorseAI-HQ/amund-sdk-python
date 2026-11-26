@@ -332,7 +332,24 @@ _REASON_HINTS = {
 }
 
 
-def record_drop(reason: str, category: str, quantity: int = 1) -> None:
+def _drop_message(reason: str, category: str, quantity: int, status: int | None) -> str:
+    """Local warning text for a drop. Auth wording matches the TypeScript SDK."""
+    if reason == REASON_AUTH_REJECTED:
+        # MHQ-1922: a rejected key must never read like a network fault.
+        return (
+            f"amund: Amund rejected the API key ({status or '401/403'}): "
+            f"{quantity} {category}(s) dropped. Check AMUND_API_KEY "
+            "(or MORSE_API_KEY) or get a new key in Settings → API keys."
+        )
+    return (
+        f"amund: dropped {quantity} {category} ({reason}) — "
+        f"{_REASON_HINTS.get(reason, 'telemetry is being lost')}"
+    )
+
+
+def record_drop(
+    reason: str, category: str, quantity: int = 1, *, status: int | None = None
+) -> None:
     """Count telemetry we discarded. Never raises, never sends immediately.
 
     Aggregated in memory and flushed with the sender's normal cadence — one
@@ -352,13 +369,7 @@ def record_drop(reason: str, category: str, quantity: int = 1) -> None:
             _LOCAL_LOG_LIMIT_PER_WINDOW,
             _LOCAL_LOG_WINDOW_SECONDS,
         ):
-            logger.warning(
-                "amund: dropped %d %s (%s) — %s",
-                quantity,
-                category,
-                reason,
-                _REASON_HINTS.get(reason, "telemetry is being lost"),
-            )
+            logger.warning("%s", _drop_message(reason, category, quantity, status))
         # MHQ-1030: arm the sender so the count goes out on the normal 5s
         # cadence. Counters alone used to build nothing, so a process that lost
         # telemetry but never raised reported it only at ``shutdown()`` — i.e.

@@ -954,6 +954,15 @@ class _CallState:
         # MHQ-1741: Azure deployment + served model; None for other clients.
         self.azure = _azure_call_slot(resource, kwargs)
 
+    def restart_clock(self) -> None:
+        """Start the llm span after the inferred tool spans just closed.
+
+        MHQ-1921: those tool spans end "now"; a clock read before them would
+        start the next model call before the tools it waited on had finished.
+        """
+        self.start_mono = time.monotonic()
+        self.started_at_iso = datetime.now(UTC).isoformat()
+
     def record(
         self,
         response: Any,
@@ -1033,6 +1042,7 @@ def _traced_call_sync(
 
     def _run() -> Any:
         _record_tool_spans_for_request(kwargs, api)
+        call_state.restart_clock()
         request_kwargs, call_state.span_id = prepare_llm_call(
             kwargs, own_span=True, propagate=propagate
         )
@@ -1073,6 +1083,7 @@ async def _traced_call_async(
 
     async def _run() -> Any:
         _record_tool_spans_for_request(kwargs, api)
+        call_state.restart_clock()
         request_kwargs, call_state.span_id = prepare_llm_call(
             kwargs, own_span=True, propagate=propagate
         )

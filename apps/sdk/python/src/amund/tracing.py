@@ -501,6 +501,70 @@ def _finalize_span(
         span.error_message = error_message
     if exc is not None:
         span.exception_type = exception_type_name(exc)
+        if span.type == SpanType.LLM:
+            provider_facts = provider_error_metadata(exc)
+            if provider_facts:
+                span.metadata = {**(span.metadata or {}), **provider_facts}
+
+
+#: Longest provider error text kept on a failed ``llm`` span.
+_PROVIDER_ERROR_MAX_CHARS = 1000
+
+
+def provider_error_metadata(exc: BaseException) -> dict[str, Any]:
+    """HTTP status and provider error text of a failed model call (MHQ-1921).
+
+    Reads the OpenAI / Anthropic ``APIStatusError`` shape (``status_code``,
+    ``message``) and Google GenAI's ``APIError`` (``code``, ``message``,
+    ``status``). Stored as span metadata (``http.status_code``,
+    ``provider_error``, ``provider_error_status``) so the server can tell an
+    invalid model (404) from a rejected key (401) or a rate limit (429).
+    Returns ``{}`` for errors with neither. Never raises.
+    """
+    facts: dict[str, Any] = {}
+    try:
+        status = getattr(exc, "status_code", None)
+        if not isinstance(status, int) or isinstance(status, bool):
+            status = getattr(exc, "code", None)
+        if not isinstance(status, int) or isinstance(status, bool):
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+        if isinstance(status, int) and not isinstance(status, bool):
+            facts["http.status_code"] = status
+        # OpenAI / Anthropic put the provider's own text in ``body``;
+        # their ``message`` is "Error code: 404 - {...}".
+        message = None
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            inner = body.get("error")
+            source = inner if isinstance(inner, dict) else body
+            message = source.get("message")
+        if not isinstance(message, str) or not message:
+            message = getattr(exc, "message", None)
+        if not isinstance(message, str) or not message:
+            message = str(exc) if facts else None
+        if message:
+            facts["provider_error"] = message[:_PROVIDER_ERROR_MAX_CHARS]
+        provider_status = getattr(exc, "status", None)
+        if isinstance(provider_status, str) and provider_status:
+            facts["provider_error_status"] = provider_status[:64]
+    except Exception:  # noqa: BLE001 — telemetry must never break the call
+        return {}
+    return facts if "http.status_code" in facts else {}
+
+
+def root_error_message(exc: BaseException) -> str:
+    """Root-span error text with the exception type first (MHQ-1921).
+
+    ``NotFoundError: The model `gpt-9` does not exist`` names the cause; the
+    bare message alone was read as a different failure.
+    """
+    name = type(exc).__name__
+    text = str(exc)
+    if not text:
+        return name
+    if text.startswith(f"{name}:"):
+        return text
+    return f"{name}: {text}"
 
 
 def _build_trace_dict(
@@ -832,7 +896,7 @@ def trace_agent(name_or_func=None):
                             root_span,
                             start_mono,
                             status="failed",
-                            error_message=str(exc_val),
+                            error_message=root_error_message(exc_val),
                             exc=exc_val,
                         )
                     else:
@@ -1058,7 +1122,7 @@ class TracedRun:
             _remove_from_stack(self._state.span_stack, self._root_span)
 
             if exc_type is not None:
-                error_msg = self._error or str(exc_val)
+                error_msg = self._error or root_error_message(exc_val)
                 _finalize_span(
                     self._root_span,
                     self._start_mono,

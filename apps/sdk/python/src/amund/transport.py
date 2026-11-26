@@ -369,6 +369,7 @@ class BatchTransport:
                     else diagnostics.REASON_ENDPOINT_REJECTED,
                     drop_category,
                     drop_count,
+                    status=status,
                 )
                 logger.warning(
                     "amund: batch send failed status=%d body=%s",

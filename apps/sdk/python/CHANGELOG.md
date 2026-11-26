@@ -20,6 +20,27 @@ because they are released in lockstep. Expect the numbers to diverge.
   the tool's name (a span that started after the model asked for the call), or on
   `tool_call_id` metadata when the span has another name. Tools without a manual span are
   still inferred.
+- **init() no longer raises without a key** (MHQ-1922). A missing `AMUND_API_KEY` (and
+  `MORSE_API_KEY`), or an empty or non-string `api_key=` argument, logs one warning on the
+  `amund` logger (`amund: no API key (set AMUND_API_KEY); tracing is off`) and the SDK stays a
+  no-op, the same as `AMUND_DISABLED=1` and the TypeScript SDK. A deploy without the variable
+  no longer crashes at startup.
+- **A rejected key no longer reads like a network fault** (MHQ-1922). When export gets 401/403
+  (OTLP exporter and legacy batch transport), the SDK prints `amund: Amund rejected the API key
+(401): N span(s) dropped. Check AMUND_API_KEY (or MORSE_API_KEY) or get a new key in
+Settings → API keys.`, matching the TypeScript SDK. Network failures keep the "could not
+  reach the Amund API" wording.
+- **Failed model calls say why** (MHQ-1921). A failed `llm` span from the OpenAI, Anthropic or
+  Google GenAI adapter carries the provider's HTTP status and error text as metadata
+  (`http.status_code`, `provider_error`, and Google's `provider_error_status`), so a 404 for an
+  invalid model is no longer read as another failure.
+- **The root error message names the exception type** (MHQ-1921), e.g.
+  `NotFoundError: The model `gpt-9` does not exist`, for `trace_agent` and `run()`.
+- **Inferred tool spans end before the next model call starts** (MHQ-1921, MHQ-1410). The
+  OpenAI and Google GenAI adapters start the next `llm` span after closing the tool spans its
+  request answers, so the timeline no longer shows a tool overlapping the call that waited on it.
+- A plain-Python tool wrapped in `span(name, "tool")` that raises already left a failed `tool`
+  span with the exception type; this is now covered by a test (MHQ-1921).
 
 ## [0.9.1rc1] — 2026-11-25
 
