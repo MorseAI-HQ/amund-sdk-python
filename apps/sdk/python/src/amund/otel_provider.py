@@ -461,6 +461,7 @@ class _DropReportingOTLPSpanExporter(OTLPSpanExporter):
                 ),
                 "span",
                 len(spans),
+                status=getattr(state, "status", None),
             )
         except Exception:  # noqa: BLE001 — counting must never break export
             logger.debug("amund: export-drop accounting failed", exc_info=True)

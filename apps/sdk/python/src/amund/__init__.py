@@ -122,6 +122,22 @@ _no_api_key_warning_emitted = False
 _last_logged_endpoint: str | None = None
 
 
+def _warn_no_api_key(*, explicit: bool) -> None:
+    """Log the missing-key warning once per process (MHQ-1922). Never raises."""
+    global _no_api_key_warning_emitted
+    if _no_api_key_warning_emitted:
+        return
+    _no_api_key_warning_emitted = True
+    if explicit:
+        msg = (
+            "amund: the api_key passed to init() is empty or not a string "
+            "(set AMUND_API_KEY); tracing is off"
+        )
+    else:
+        msg = "amund: no API key (set AMUND_API_KEY); tracing is off"
+    logger.warning(msg)
+
+
 def _log_destination_url(client: _Client) -> None:
     """Emit the destination-URL transparency log line.
 
@@ -192,7 +208,7 @@ def _ensure_initialized() -> bool:
     var is unset, a one-time-per-process warning is logged and the function
     returns False — caller should silently no-op.
     """
-    global _client, _no_api_key_warning_emitted
+    global _client
 
     if env.is_disabled():
         return False
@@ -205,14 +221,7 @@ def _ensure_initialized() -> bool:
             return True
         api_key = env.get_api_key()
         if not api_key:
-            if not _no_api_key_warning_emitted:
-                msg = (
-                    "amund not initialized — set AMUND_API_KEY "
-                    "or call amund.init() (this warning prints once "
-                    "per process; SDK calls are silent no-ops)"
-                )
-                logger.warning(msg)
-                _no_api_key_warning_emitted = True
+            _warn_no_api_key(explicit=False)
             return False
         # MHQ-1054: same registration as init(), and this is the path that
         # matters most — the zero-code-change story means most installs never
@@ -264,8 +273,9 @@ def init(
     Args:
         api_key: Your Amund API key (starts with "mhq_"). Optional —
             if omitted, the SDK reads ``AMUND_API_KEY`` (or the legacy
-            ``MORSE_API_KEY``) from the environment. Raises ``ValueError``
-            if neither is provided.
+            ``MORSE_API_KEY``) from the environment. If neither gives a
+            non-empty key, init() logs one warning on the ``amund`` logger
+            and the SDK stays a no-op (it never raises).
         endpoint: Optional ingestion URL override. None = env or default.
         flush_interval: Seconds between batch flushes (default: 2.0)
         redaction_enabled: When True (default), the SDK redacts PII from span
@@ -309,13 +319,14 @@ def init(
     from amund.propagation import set_propagate_default  # noqa: PLC0415
 
     set_propagate_default(propagate_trace_context)
-    # Resolve api_key: explicit arg wins, then env var, then error.
-    resolved_key = api_key or env.get_api_key()
-    if not resolved_key:
-        raise ValueError(
-            "api_key must be provided or AMUND_API_KEY env var must be set "
-            "(MORSE_API_KEY is still read)"
-        )
+    # Resolve api_key: explicit arg wins, then env var. A missing, empty or
+    # non-string key never raises (MHQ-1922): a deploy without the variable must
+    # not crash at startup. It logs one warning and the SDK stays a no-op, the
+    # same as AMUND_DISABLED=1 (and the TypeScript SDK).
+    resolved_key = api_key if api_key is not None else env.get_api_key()
+    if not isinstance(resolved_key, str) or not resolved_key.strip():
+        _warn_no_api_key(explicit=api_key is not None)
+        return
 
     # Validate redaction config BEFORE the absorb_errors-wrapped body runs.
     # Misconfiguration is a programming error at app startup, not a runtime

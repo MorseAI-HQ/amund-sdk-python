@@ -412,6 +412,11 @@ class _CallState:
         self.first_chunk_mono: float | None = None
         self.done = False
 
+    def restart_clock(self) -> None:
+        """Start the llm span after the inferred tool spans just closed (MHQ-1921)."""
+        self.start_mono = time.monotonic()
+        self.started_at_iso = datetime.now(UTC).isoformat()
+
     def record(self, reply: _Reply | None, error: BaseException | None = None) -> None:
         if self.done:
             return
@@ -515,6 +520,7 @@ def _traced_sync(original: Any) -> Any:
 
         def _run() -> Any:
             _record_tool_spans_for_request(kwargs)
+            call_state.restart_clock()
             try:
                 response = original(self, *args, **kwargs)
             except BaseException as exc:
@@ -544,6 +550,7 @@ def _traced_async(original: Any) -> Any:
 
         async def _run() -> Any:
             _record_tool_spans_for_request(kwargs)
+            call_state.restart_clock()
             try:
                 response = await original(self, *args, **kwargs)
             except BaseException as exc:
