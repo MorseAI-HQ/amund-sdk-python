@@ -13,6 +13,18 @@ Verdict-first performance intelligence for production AI agents.
 "No matching distribution found"; only `pip install -v amund` shows the real reason
 (`requires-python >=3.11`).
 
+## Set up with a coding agent
+
+Using Claude Code, Cursor or Codex? Give it the Amund setup skill and it instruments your agent
+for you: install, `init()` and `run()`, the client wrapper or framework adapter, outcomes only
+where your code can check them, then a check that the first trace arrived.
+
+```text
+Read https://docs.amundai.com/skills/amund-setup/SKILL.md and follow it to instrument this agent with Amund.
+```
+
+How to install the skill for each editor: https://docs.amundai.com/start/coding-agent
+
 ## Install
 
 ```bash
