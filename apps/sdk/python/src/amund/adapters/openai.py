@@ -54,6 +54,7 @@ from amund.tracing import (
     _finalize_span,
     _TraceState,
     apply_end_user,
+    claim_manual_tool_span,
     get_active_trace,
 )
 from amund.tracing import run as _av_run
@@ -868,6 +869,8 @@ def _record_tool_spans_for_request(kwargs: dict[str, Any], api: str) -> None:
             if pending is None:
                 continue
             name = pending["name"]
+            if claim_manual_tool_span(state, name, call_id, pending["asked_iso"]):
+                continue  # MHQ-1928: the app's own span(name, "tool") has it
             metadata: dict[str, Any] = {
                 "tool_call_id": call_id,
                 "timing": "inferred",

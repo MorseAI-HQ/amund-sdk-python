@@ -135,6 +135,54 @@ class _TraceState:
     # provider's call id, waiting for the request that carries their result.
     # The OpenAI adapter turns each matched pair into a ``tool`` span.
     pending_tool_calls: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # MHQ-1928: manual ``span(..., "tool")`` spans already standing in for an
+    # inferred tool span, so one manual span never absorbs two tool calls.
+    matched_tool_spans: set[str] = field(default_factory=set)
+
+
+def claim_manual_tool_span(
+    state: "_TraceState", name: str, call_id: str | None, asked_iso: str
+) -> SpanData | None:
+    """The manual tool span that already records this tool call, if any.
+
+    MHQ-1928. A raw client wrapped with ``wrap()`` infers a ``tool`` span for
+    every tool call it sees answered. An app that also wraps its tool in
+    ``span(name, "tool")`` would get the same call twice. The manual span wins:
+    it carries real timing. It matches when it set ``tool_call_id`` metadata to
+    this call's id, or, failing that, when it has the tool's name and started
+    after the model asked for the call. The matched span gains the
+    ``tool_call_id`` so the two stay linked.
+    """
+    try:
+        asked = datetime.fromisoformat(asked_iso)
+    except (TypeError, ValueError):
+        return None
+    by_name: SpanData | None = None
+    for done in state.completed_spans:
+        if done.type != SpanType.TOOL or done.span_id in state.matched_tool_spans:
+            continue
+        meta = done.metadata or {}
+        if meta.get("timing") == "inferred":
+            continue
+        if call_id and meta.get("tool_call_id") == call_id:
+            by_name = done
+            break
+        if by_name is not None or done.name != name or meta.get("tool_call_id"):
+            continue
+        try:
+            started = datetime.fromisoformat(done.started_at)
+        except (TypeError, ValueError):
+            started = None
+        if started is not None and started >= asked:
+            by_name = done
+    if by_name is None:
+        return None
+    state.matched_tool_spans.add(by_name.span_id)
+    if call_id:
+        if by_name.metadata is None:
+            by_name.metadata = {}
+        by_name.metadata.setdefault("tool_call_id", call_id)
+    return by_name
 
 
 # ContextVar is the correct tool here: async-safe, no thread-local race
@@ -1363,9 +1411,19 @@ def span(
 ) -> TracedSpan:
     """Create a child span context manager under the current trace context.
 
-    ``input_data`` optionally attaches a payload to the span (e.g. the
-    parameterized SQL statement for a ``db`` span). No-op when called outside
-    an active trace.
+    ``span_type`` is one of ``tool``, ``retriever``, ``db``, ``http``,
+    ``queue``, ``memory``, ``guardrail``, ``handoff``, ``agent``, ``llm`` or
+    ``custom`` (the default). ``input_data`` optionally attaches a payload to
+    the span (the tool's arguments, a retriever's query, the parameterized SQL
+    of a ``db`` span). The handle has ``set_output()``, ``set_metadata()`` and
+    ``mark_failed()``. No-op, with a one-time warning, outside an active trace.
+
+    A tool span replaces the one ``wrap()`` infers for the same tool call
+    (MHQ-1928): it matches on the tool's name, or on ``tool_call_id`` metadata
+    when the span has another name::
+
+        with amund.span("search_docs", "tool", input_data=args) as s:
+            s.set_output(search_docs(**args))
     """
     return TracedSpan(
         name, span_type, input_data=input_data, parent_span_id=parent_span_id

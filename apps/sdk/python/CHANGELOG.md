@@ -11,6 +11,16 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A tool wrapped in `span(name, "tool")` is no longer recorded twice under `wrap()`**
+  (MHQ-1928). The OpenAI and Google GenAI raw-client adapters infer a `tool` span for every
+  tool call they see answered. When the app also opens its own tool span for that call, the
+  manual span now stands in for the inferred one and gains the `tool_call_id`. It matches on
+  the tool's name (a span that started after the model asked for the call), or on
+  `tool_call_id` metadata when the span has another name. Tools without a manual span are
+  still inferred.
+
 ## [0.9.1rc1] — 2026-11-25
 
 ### Changed — the package is now `amund` (`morse-ai` becomes a compatibility shim)

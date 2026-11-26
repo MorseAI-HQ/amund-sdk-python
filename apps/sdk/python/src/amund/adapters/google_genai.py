@@ -55,7 +55,7 @@ from amund._internal.errors import absorb_errors
 from amund.context.decomposer import decompose_openai_messages
 from amund.pricing import calculate_cost
 from amund.spans import SpanData, SpanType
-from amund.tracing import _finalize_span, get_active_trace
+from amund.tracing import _finalize_span, claim_manual_tool_span, get_active_trace
 from amund.tracing import run as _av_run
 
 logger = logging.getLogger("amund")
@@ -373,6 +373,8 @@ def _record_tool_spans_for_request(kwargs: dict[str, Any]) -> None:
             pending = state.pending_tool_calls.pop(_tool_key(call_id, name), None)
             if pending is None:
                 continue
+            if claim_manual_tool_span(state, name, call_id, pending["asked_iso"]):
+                continue  # MHQ-1928: the app's own span(name, "tool") has it
             metadata: dict[str, Any] = {
                 "timing": "inferred",
                 "source": "google_genai.function_call",
