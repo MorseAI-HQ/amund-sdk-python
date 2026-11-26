@@ -386,7 +386,7 @@ class TestDeliveryReasonCodes:
         monkeypatch.setattr(
             transport_mod.diagnostics,
             "record_drop",
-            lambda reason, category, quantity=1: seen.append(
+            lambda reason, category, quantity=1, status=None: seen.append(
                 (reason, category, quantity)
             ),
         )
@@ -418,6 +418,33 @@ class TestDeliveryReasonCodes:
         assert seen[0][0] == expected, f"{status} reported as {seen[0][0]!r}"
         # The regression this class exists to prevent.
         assert seen[0][0] != "encode_failed"
+
+    @pytest.mark.req("MHQ-1922")
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_rejected_key_says_so_not_unreachable(
+        self, mock_endpoint, fast_backoff, caplog, status
+    ):
+        """A wrong key reads as a rejected key, never as a network fault."""
+        mock_endpoint.post(ENDPOINT).mock(
+            return_value=httpx.Response(status, text="no")
+        )
+        transport = make_transport()
+        with caplog.at_level("WARNING", logger="amund"):
+            try:
+                transport.track({"traces": [{"trace": {"agent": "a"}, "spans": []}]})
+                assert wait_for(
+                    lambda: any(
+                        "rejected the API key" in r.getMessage() for r in caplog.records
+                    )
+                )
+            finally:
+                transport.shutdown()
+        text = " ".join(r.getMessage() for r in caplog.records)
+        assert (
+            f"amund: Amund rejected the API key ({status}): 1 trace(s) dropped." in text
+        )
+        assert "Settings → API keys" in text
+        assert "could not reach" not in text
 
     def test_encode_failure_is_the_only_encode_failed(
         self, mock_endpoint, fast_backoff, monkeypatch

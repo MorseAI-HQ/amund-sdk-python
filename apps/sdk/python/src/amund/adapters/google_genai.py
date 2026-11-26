@@ -55,7 +55,7 @@ from amund._internal.errors import absorb_errors
 from amund.context.decomposer import decompose_openai_messages
 from amund.pricing import calculate_cost
 from amund.spans import SpanData, SpanType
-from amund.tracing import _finalize_span, get_active_trace
+from amund.tracing import _finalize_span, claim_manual_tool_span, get_active_trace
 from amund.tracing import run as _av_run
 
 logger = logging.getLogger("amund")
@@ -373,6 +373,8 @@ def _record_tool_spans_for_request(kwargs: dict[str, Any]) -> None:
             pending = state.pending_tool_calls.pop(_tool_key(call_id, name), None)
             if pending is None:
                 continue
+            if claim_manual_tool_span(state, name, call_id, pending["asked_iso"]):
+                continue  # MHQ-1928: the app's own span(name, "tool") has it
             metadata: dict[str, Any] = {
                 "timing": "inferred",
                 "source": "google_genai.function_call",
@@ -411,6 +413,11 @@ class _CallState:
         self.started_at_iso = datetime.now(UTC).isoformat()
         self.first_chunk_mono: float | None = None
         self.done = False
+
+    def restart_clock(self) -> None:
+        """Start the llm span after the inferred tool spans just closed (MHQ-1921)."""
+        self.start_mono = time.monotonic()
+        self.started_at_iso = datetime.now(UTC).isoformat()
 
     def record(self, reply: _Reply | None, error: BaseException | None = None) -> None:
         if self.done:
@@ -515,6 +522,7 @@ def _traced_sync(original: Any) -> Any:
 
         def _run() -> Any:
             _record_tool_spans_for_request(kwargs)
+            call_state.restart_clock()
             try:
                 response = original(self, *args, **kwargs)
             except BaseException as exc:
@@ -544,6 +552,7 @@ def _traced_async(original: Any) -> Any:
 
         async def _run() -> Any:
             _record_tool_spans_for_request(kwargs)
+            call_state.restart_clock()
             try:
                 response = await original(self, *args, **kwargs)
             except BaseException as exc:

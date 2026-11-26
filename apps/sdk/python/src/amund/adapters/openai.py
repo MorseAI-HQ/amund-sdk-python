@@ -54,6 +54,7 @@ from amund.tracing import (
     _finalize_span,
     _TraceState,
     apply_end_user,
+    claim_manual_tool_span,
     get_active_trace,
 )
 from amund.tracing import run as _av_run
@@ -868,6 +869,8 @@ def _record_tool_spans_for_request(kwargs: dict[str, Any], api: str) -> None:
             if pending is None:
                 continue
             name = pending["name"]
+            if claim_manual_tool_span(state, name, call_id, pending["asked_iso"]):
+                continue  # MHQ-1928: the app's own span(name, "tool") has it
             metadata: dict[str, Any] = {
                 "tool_call_id": call_id,
                 "timing": "inferred",
@@ -951,6 +954,15 @@ class _CallState:
         # MHQ-1741: Azure deployment + served model; None for other clients.
         self.azure = _azure_call_slot(resource, kwargs)
 
+    def restart_clock(self) -> None:
+        """Start the llm span after the inferred tool spans just closed.
+
+        MHQ-1921: those tool spans end "now"; a clock read before them would
+        start the next model call before the tools it waited on had finished.
+        """
+        self.start_mono = time.monotonic()
+        self.started_at_iso = datetime.now(UTC).isoformat()
+
     def record(
         self,
         response: Any,
@@ -1030,6 +1042,7 @@ def _traced_call_sync(
 
     def _run() -> Any:
         _record_tool_spans_for_request(kwargs, api)
+        call_state.restart_clock()
         request_kwargs, call_state.span_id = prepare_llm_call(
             kwargs, own_span=True, propagate=propagate
         )
@@ -1070,6 +1083,7 @@ async def _traced_call_async(
 
     async def _run() -> Any:
         _record_tool_spans_for_request(kwargs, api)
+        call_state.restart_clock()
         request_kwargs, call_state.span_id = prepare_llm_call(
             kwargs, own_span=True, propagate=propagate
         )
