@@ -10,15 +10,15 @@ under which its own client silently loses telemetry: an over-quota customer.
 MHQ-660's acceptance criterion — "429 with Retry-After → backoff → successful
 redelivery, no data loss" — was therefore unmet by the OTel rebuild.
 
-The stub goes in at the *session*, matching test_otel_export_drops.py: the
-overrides under test are `export`/`_export`, so shadowing either on the
-instance would leave the test asserting against stock behaviour.
+The stub is a transport adapter on the exporter's session
+(`tests/_otlp_stub.py`), so the stock exporter of the installed version and
+Amund's `export` override both run for real.
 """
 
 from __future__ import annotations
 
 import time
-from types import SimpleNamespace
+from importlib.metadata import version
 
 import pytest
 from opentelemetry.sdk.trace import ReadableSpan
@@ -27,6 +27,12 @@ from opentelemetry.trace import SpanContext, TraceFlags
 
 from amund import otel_provider
 from amund._internal import diagnostics
+from tests import _otlp_stub
+
+# opentelemetry-exporter-otlp-proto-http 1.45 started retrying 429 itself.
+_STOCK_RETRIES_429 = tuple(
+    int(p) for p in version("opentelemetry-exporter-otlp-proto-http").split(".")[:2]
+) >= (1, 45)
 
 
 @pytest.fixture(autouse=True)
@@ -75,6 +81,7 @@ def _exporter(responses):
 
     Each entry is ``(status, retry_after)``. The last entry repeats once the
     list is exhausted, so a test can say "429 forever" with one element.
+    ``exporter._calls`` records the attempts actually made.
     """
     exporter = otel_provider._DropReportingOTLPSpanExporter(
         endpoint="http://localhost:1/api/v1/otlp/v1/traces",
@@ -84,19 +91,13 @@ def _exporter(responses):
     calls: list[tuple[int, str | None]] = []
     queue = list(responses)
 
-    def _fake_post(**_kwargs):
+    def _next():
         status, retry_after = queue.pop(0) if len(queue) > 1 else queue[0]
         calls.append((status, retry_after))
-        headers = {} if retry_after is None else {"Retry-After": retry_after}
-        return SimpleNamespace(
-            status_code=status,
-            ok=200 <= status < 300,
-            reason="stub",
-            text="",
-            headers=headers,
-        )
+        return status, ({} if retry_after is None else {"Retry-After": retry_after})
 
-    exporter._session = SimpleNamespace(post=_fake_post, close=lambda: None)
+    adapter = _otlp_stub._ScriptedAdapter(_next)
+    exporter._amund_session.mount("http://", adapter)
     exporter._calls = calls
     return exporter
 
@@ -169,7 +170,13 @@ def test_a_zero_retry_after_retries_rather_than_dropping(_no_real_sleeping):
 
     assert result is SpanExportResult.SUCCESS
     assert len(exporter._calls) == 2, "a 0 must not end the retry loop"
-    assert _no_real_sleeping == [1.0], "falls back to backoff, does not busy-loop"
+    # On otel 1.45+ the stock client may retry the 429 itself before its
+    # (tiny) timeout runs out, so whether our loop waits at all is timing.
+    # What must hold either way: if it waits, it backs off rather than
+    # busy-looping on the 0.
+    assert _no_real_sleeping in ([1.0], []), "falls back to backoff"
+    if not _STOCK_RETRIES_429:
+        assert _no_real_sleeping == [1.0]
     assert diagnostics._drain_counters() == []
 
 
@@ -188,7 +195,12 @@ def test_a_garbage_retry_after_falls_back_rather_than_raising(_no_real_sleeping)
     result = exporter.export([_one_span()])
 
     assert result is SpanExportResult.SUCCESS
-    assert _no_real_sleeping == [1.0]
+    if _STOCK_RETRIES_429:
+        # 1.45+ reads the HTTP-date itself (a past date means "now") and
+        # retries inside the stock client, so our loop never has to wait.
+        assert _no_real_sleeping in ([1.0], [])
+    else:
+        assert _no_real_sleeping == [1.0]
 
 
 def test_a_shutdown_during_the_wait_stops_retrying(monkeypatch):
