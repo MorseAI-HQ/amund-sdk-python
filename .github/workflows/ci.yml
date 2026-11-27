@@ -44,6 +44,24 @@ jobs:
       - name: Test without live-backend integration cases
         working-directory: apps/sdk/python
         run: uv run --frozen pytest -m "not integration"
+      - name: OTLP exporter tests across the supported OpenTelemetry range
+        # MHQ-1922: uv.lock pins one exporter version, and 1.45 broke status
+        # capture without failing any test run against the pin. Run the
+        # exporter-facing tests on the pyproject floor and a newer release too.
+        working-directory: apps/sdk/python
+        run: |
+          for v in 1.27.0 1.45.2; do
+            echo "::group::opentelemetry $v"
+            uv run --frozen \
+              --with "opentelemetry-sdk==$v" \
+              --with "opentelemetry-exporter-otlp-proto-http==$v" \
+              pytest -m "not integration" \
+              tests/test_otel_status_capture_mhq1922.py \
+              tests/test_otel_export_drops.py \
+              tests/test_otel_429_retry.py \
+              tests/test_sdk_error_reporting.py
+            echo "::endgroup::"
+          done
       - name: Lint
         working-directory: apps/sdk/python
         run: uv run --frozen ruff check .

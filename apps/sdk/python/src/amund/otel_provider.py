@@ -65,6 +65,7 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+import requests
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
@@ -342,6 +343,47 @@ def _parse_retry_after(raw: Any) -> float | None:
 _exporter_generation = 0
 
 
+class _StatusRecordingSession(requests.Session):
+    """``requests.Session`` that notes each HTTP attempt's outcome (MHQ-1922).
+
+    The exporter needs the HTTP status of its last attempt to name a drop
+    (``_drop_reason``), and the ``Retry-After`` of a 429 to honor it. The stock
+    exporter exposes neither: ``export()`` returns a bare SUCCESS/FAILURE.
+
+    This used to be observed by overriding the exporter's private ``_export()``.
+    opentelemetry-exporter-otlp-proto-http 1.45 moved the send into a separate
+    HTTP client and no longer calls ``_export()`` at all, so the status stayed
+    None and a revoked key was reported as "could not reach the Amund API".
+
+    The session is the one seam every supported version shares: ``session=`` is
+    a public constructor argument since before 1.27, and every version sends
+    through ``Session.request`` (1.27-1.44 via ``session.post``, 1.45+ via its
+    requests transport). ``request`` is called once per attempt and returns the
+    final response after redirects, so it is the right place to count.
+
+    A connection error raises out of ``super().request`` before a status is
+    recorded, so the status stays None and the drop keeps its "could not
+    reach" wording.
+    """
+
+    def __init__(self, state: threading.local) -> None:
+        super().__init__()
+        self._amund_attempt_state = state
+
+    def request(self, method: Any, url: Any, *args: Any, **kwargs: Any) -> Any:
+        state = self._amund_attempt_state
+        state.attempts = getattr(state, "attempts", 0) + 1
+        state.status = None
+        state.retry_after = None
+        response = super().request(method, url, *args, **kwargs)
+        state.status = getattr(response, "status_code", None)
+        if state.status == 429:
+            state.retry_after = _parse_retry_after(
+                (getattr(response, "headers", None) or {}).get("Retry-After")
+            )
+        return response
+
+
 class _DropReportingOTLPSpanExporter(OTLPSpanExporter):
     """OTLP exporter that counts what it permanently discards (MHQ-1030).
 
@@ -352,41 +394,35 @@ class _DropReportingOTLPSpanExporter(OTLPSpanExporter):
     That is the failure mode Amund exists to prevent, so it does not get to
     live in Amund's own SDK.
 
-    ``_export()`` is overridden purely to *observe* the HTTP status and
-    ``Retry-After``. Neither is available from ``export()``'s bare
-    SUCCESS/FAILURE return, and without the status every drop here would have to
-    be reported under a single guessed reason. Signature is passed through
-    untouched (``*args``), so a future version of the exporter that adds a
-    parameter still works.
+    The HTTP status and ``Retry-After`` of each attempt are observed through
+    the ``requests`` session handed to the stock exporter
+    (``_StatusRecordingSession``), not through any exporter internals, so the
+    observation works across the exporter versions pyproject allows (MHQ-1922).
 
-    It also retries 429 (MHQ-673), which the stock exporter does not: upstream
-    treats only 408 and 5xx as retryable and ignores ``Retry-After`` entirely,
-    so a rate-limited batch is discarded on its first response. The retry lives
-    in ``export()`` around the stock loop rather than inside it — upstream's
-    backoff/deadline logic is version-fragile internals, and wrapping it keeps
-    this class working across the exporter versions pyproject allows.
+    Passing ``session=`` means the stock exporter's
+    ``OTEL_PYTHON_EXPORTER_OTLP_HTTP_*CREDENTIAL_PROVIDER`` session (newer
+    versions) is not loaded. Amund authenticates with the ``Authorization``
+    header, which is unaffected.
+
+    It also retries 429 (MHQ-673), which the stock exporter before 1.45 does
+    not: it treated only 408 and 5xx as retryable and ignored ``Retry-After``,
+    so a rate-limited batch was discarded on its first response. The retry
+    lives in ``export()`` around the stock loop rather than inside it —
+    upstream's backoff/deadline logic is version-fragile internals, and
+    wrapping it keeps this class working across versions. On 1.45+, which
+    retries 429 itself within its timeout, this adds a bounded second layer.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._generation = _exporter_generation
         # Thread-local: force_flush() can drive an export concurrently with the
         # BatchSpanProcessor's own worker, and two exports must not read each
         # other's status.
         self._attempt_state = threading.local()
-
-    def _export(self, *args: Any, **kwargs: Any) -> Any:
-        state = self._attempt_state
-        state.attempts = getattr(state, "attempts", 0) + 1
-        state.status = None
-        state.retry_after = None
-        response = super()._export(*args, **kwargs)
-        state.status = getattr(response, "status_code", None)
-        if state.status == 429:
-            state.retry_after = _parse_retry_after(
-                (getattr(response, "headers", None) or {}).get("Retry-After")
-            )
-        return response
+        if kwargs.get("session") is None:
+            kwargs["session"] = _StatusRecordingSession(self._attempt_state)
+        self._amund_session = kwargs["session"]
+        super().__init__(*args, **kwargs)
+        self._generation = _exporter_generation
 
     def _wait_before_retry(self, delay: float) -> bool:
         """Sleep ``delay``. False if shutdown interrupted it.
@@ -410,7 +446,15 @@ class _DropReportingOTLPSpanExporter(OTLPSpanExporter):
             state.attempts = 0
             state.status = None
             state.retry_after = None
-            result = super().export(spans)
+            try:
+                result = super().export(spans)
+            except requests.exceptions.RequestException:
+                # Older exporters (1.27.0 measured) let a connection error escape
+                # export(); BatchSpanProcessor then logs it and drops the
+                # batch uncounted. Treat it as the failed send it is.
+                logger.debug("amund: OTLP export raised", exc_info=True)
+                result = SpanExportResult.FAILURE
+                break
             if result is SpanExportResult.SUCCESS:
                 return result
 
