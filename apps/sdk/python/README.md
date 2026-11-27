@@ -400,6 +400,41 @@ Non-string leaves (numbers, booleans, `None`, opaque objects) pass
 through untouched. Span IDs, timestamps, durations, token counts, and
 other metadata are never redacted.
 
+### Span attribute keys
+
+Every OTLP span and resource attribute the SDK emits is under the `amund.*`
+namespace, with the same suffix the `morse.*` key had. Only `amund.*` is sent
+(no double emission); the server reads `amund.*` first and falls back to
+`morse.*`, so older SDK versions keep working. `amund.harness.*` is unchanged.
+
+| Old key (`morse.*`)                     | New key (`amund.*`)          |
+| --------------------------------------- | ---------------------------- |
+| `morse.span_type`                       | `amund.span_type`            |
+| `morse.cost_usd`                        | `amund.cost_usd`             |
+| `morse.input_data`                      | `amund.input_data`           |
+| `morse.output_data`                     | `amund.output_data`          |
+| `morse.context_segments`                | `amund.context_segments`     |
+| `morse.metadata.<key>`                  | `amund.metadata.<key>`       |
+| `morse.agent`                           | `amund.agent`                |
+| `morse.agent_version`                   | `amund.agent_version`        |
+| `morse.identity_source`                 | `amund.identity_source`      |
+| `morse.app`                             | `amund.app`                  |
+| `morse.thread_id`                       | `amund.thread_id`            |
+| `morse.user_id`                         | `amund.user_id`              |
+| `morse.user_metadata`                   | `amund.user_metadata`        |
+| `morse.outcome.success`                 | `amund.outcome.success`      |
+| `morse.outcome.label`                   | `amund.outcome.label`        |
+| `morse.record_key.<type>`               | `amund.record_key.<type>`    |
+| `morse.framework`                       | `amund.framework`            |
+| `morse.source`                          | `amund.source`               |
+| `morse.prompt.name`                     | `amund.prompt.name`          |
+| `morse.prompt.version`                  | `amund.prompt.version`       |
+| `morse.prompt.link_source`              | `amund.prompt.link_source`   |
+| `morse.exception_type`                  | `amund.exception_type`       |
+| `morse.error_message`                   | `amund.error_message`        |
+| `morse.sdk.version` (resource)          | `amund.sdk.version`          |
+| `morse.process.service_name` (resource) | `amund.process.service_name` |
+
 ## Docs
 
 Full reference — every adapter, all `init()` options, configuration,
@@ -434,5 +469,6 @@ pip install amund              # same extras: "amund[anthropic]" etc.
 - The SDK's own logger is now `amund` (was `morse_ai`). If you configured it
   by name, e.g. `logging.getLogger("morse_ai").setLevel(...)` or a
   `dictConfig` `loggers` entry, rename it to `amund`.
-- Nothing changes on the wire: span attributes, headers and the default
-  endpoint are the same, so dashboards and alerts keep working.
+- Nothing changes on the wire for the rename itself: headers and the default
+  endpoint are the same. Span attribute keys moved from `morse.*` to `amund.*`
+  in a later change; see [Span attribute keys](#span-attribute-keys).

@@ -129,7 +129,7 @@ class TestByteCap:
 
         matching = _spans_for(engine, trace_id)
         assert matching, "expected the emitted span to be captured"
-        raw = matching[0].attributes.get("morse.input_data")
+        raw = matching[0].attributes.get("amund.input_data")
         assert raw is not None
         marker_len = len(TRUNCATION_MARKER.encode("utf-8"))
         assert len(raw.encode("utf-8")) <= 65536 + marker_len + 2
@@ -247,7 +247,7 @@ class TestExportTimeRedaction:
 
         matching = _spans_for(engine, trace_id)
         assert matching
-        raw = matching[0].attributes.get("morse.input_data")
+        raw = matching[0].attributes.get("amund.input_data")
         assert raw is not None
         assert "jane@example.com" not in raw
         assert "[REDACTED:email]" in raw
@@ -276,7 +276,7 @@ class TestExportTimeRedaction:
             ]
             assert matching
             assert "jane@example.com" in matching[0].attributes.get(
-                "morse.input_data", ""
+                "amund.input_data", ""
             )
         finally:
             eng.reset_for_testing()

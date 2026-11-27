@@ -146,14 +146,14 @@ def _assert_full_trace(result: dict, root_name: str) -> None:
 @pytest.mark.req("MHQ-1154")
 @pytest.mark.parametrize("import_order", ["init_first", "agents_first"])
 def test_run_sync_nested_in_morse_run_keeps_all_spans(import_order):
-    # AID-04: run("agent-x") is the morse.app label; the starting agent is the root.
+    # AID-04: run("agent-x") is the amund.app label; the starting agent is the root.
     _assert_full_trace(_run("run_sync_nested", import_order), "Calc")
 
 
 @pytest.mark.req("MHQ-1154")
 @pytest.mark.parametrize("import_order", ["init_first", "agents_first"])
 def test_async_run_nested_in_morse_run_keeps_all_spans(import_order):
-    # AID-04: run("agent-x") is the morse.app label; the starting agent is the root.
+    # AID-04: run("agent-x") is the amund.app label; the starting agent is the root.
     _assert_full_trace(_run("run_async_nested", import_order), "Calc")
 
 

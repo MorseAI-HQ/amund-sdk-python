@@ -76,7 +76,7 @@ def _otel_spans(eng, trace_id_hex):
 
 def _otel_root(eng, trace_id_hex):
     spans = _otel_spans(eng, trace_id_hex)
-    return next(s for s in spans if "morse.agent" in dict(s.attributes))
+    return next(s for s in spans if "amund.agent" in dict(s.attributes))
 
 
 def _trace() -> dict:
@@ -225,8 +225,8 @@ def test_record_keys_become_root_span_attributes_on_otlp(engine):
         amund.link_record("zendesk_ticket", "4812")
         trace_id = r.trace_id
     attrs = dict(_otel_root(engine, trace_id).attributes)
-    assert attrs["morse.record_key.order_id"] == "5"
-    assert attrs["morse.record_key.zendesk_ticket"] == "4812"
+    assert attrs["amund.record_key.order_id"] == "5"
+    assert attrs["amund.record_key.zendesk_ticket"] == "4812"
 
 
 # ---------------------------------------------------------------------------
@@ -284,10 +284,10 @@ def test_agent_version_is_root_span_attribute_on_otlp(engine):
             pass
         trace_id = r.trace_id
     spans = _otel_spans(engine, trace_id)
-    versions = [dict(s.attributes).get("morse.agent_version") for s in spans]
+    versions = [dict(s.attributes).get("amund.agent_version") for s in spans]
     assert versions.count("2.4.1") == 1  # root only
-    root = next(s for s in spans if dict(s.attributes).get("morse.agent"))
-    assert dict(root.attributes)["morse.agent_version"] == "2.4.1"
+    root = next(s for s in spans if dict(s.attributes).get("amund.agent"))
+    assert dict(root.attributes)["amund.agent_version"] == "2.4.1"
 
 
 # ---------------------------------------------------------------------------
@@ -405,8 +405,8 @@ def test_otlp_prompt_on_root_span_when_set_outside_a_span(engine):
         amund.set_prompt("triage", 7)
         trace_id = r.trace_id
     attrs = dict(_otel_root(engine, trace_id).attributes)
-    assert attrs["morse.prompt.name"] == "triage"
-    assert attrs["morse.prompt.version"] == 7
+    assert attrs["amund.prompt.name"] == "triage"
+    assert attrs["amund.prompt.version"] == 7
 
 
 @pytest.mark.req("ATTR-04")
@@ -415,8 +415,8 @@ def test_otlp_prompt_without_version_has_no_version_attr(engine):
         amund.set_prompt("triage")
         trace_id = r.trace_id
     attrs = dict(_otel_root(engine, trace_id).attributes)
-    assert attrs["morse.prompt.name"] == "triage"
-    assert "morse.prompt.version" not in attrs
+    assert attrs["amund.prompt.name"] == "triage"
+    assert "amund.prompt.version" not in attrs
 
 
 @pytest.mark.req("ATTR-04")
@@ -427,10 +427,10 @@ def test_otlp_prompt_lands_on_the_span_it_was_set_in(engine):
             amund.set_prompt("span-prompt", 2)
         trace_id = r.trace_id
     spans = {s.name: dict(s.attributes) for s in _otel_spans(engine, trace_id)}
-    assert spans["agent"]["morse.prompt.name"] == "root-prompt"
-    assert spans["agent"]["morse.prompt.version"] == 1
-    assert spans["llm-call"]["morse.prompt.name"] == "span-prompt"
-    assert spans["llm-call"]["morse.prompt.version"] == 2
+    assert spans["agent"]["amund.prompt.name"] == "root-prompt"
+    assert spans["agent"]["amund.prompt.version"] == 1
+    assert spans["llm-call"]["amund.prompt.name"] == "span-prompt"
+    assert spans["llm-call"]["amund.prompt.version"] == 2
 
 
 @pytest.mark.req("ATTR-04")
@@ -441,8 +441,8 @@ def test_otlp_last_prompt_per_span_wins_but_json_keeps_all(engine):
             amund.set_prompt("second", 2)
         trace_id = r.trace_id
     spans = {s.name: dict(s.attributes) for s in _otel_spans(engine, trace_id)}
-    assert spans["llm-call"]["morse.prompt.name"] == "second"
-    assert "morse.prompt.name" not in spans["agent"]  # no overwrite elsewhere
+    assert spans["llm-call"]["amund.prompt.name"] == "second"
+    assert "amund.prompt.name" not in spans["agent"]  # no overwrite elsewhere
     assert [p["name"] for p in _trace()["prompts"]] == ["first", "second"]
 
 
@@ -453,8 +453,8 @@ def test_otlp_version_does_not_leak_from_a_versionless_later_ref(engine):
         amund.set_prompt("b")
         trace_id = r.trace_id
     attrs = dict(_otel_root(engine, trace_id).attributes)
-    assert attrs["morse.prompt.name"] == "b"
-    assert "morse.prompt.version" not in attrs
+    assert attrs["amund.prompt.name"] == "b"
+    assert "amund.prompt.version" not in attrs
 
 
 # ---------------------------------------------------------------------------
@@ -617,7 +617,7 @@ def test_service_name_in_env_still_never_becomes_agent_identity(monkeypatch, eng
     with amund.run("explicit") as r:
         trace_id = r.trace_id
     attrs = dict(_otel_root(engine, trace_id).attributes)
-    assert attrs["morse.agent"] == "explicit"
+    assert attrs["amund.agent"] == "explicit"
 
 
 # ---------------------------------------------------------------------------

@@ -201,5 +201,5 @@ def test_otlp_attribute_link_source():
             prompt_ref=ref,
         )
 
-    assert attrs(FETCH_REF)["morse.prompt.link_source"] == "fetch"
-    assert "morse.prompt.link_source" not in attrs({"name": "triage", "version": 3})
+    assert attrs(FETCH_REF)["amund.prompt.link_source"] == "fetch"
+    assert "amund.prompt.link_source" not in attrs({"name": "triage", "version": 3})

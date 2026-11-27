@@ -485,7 +485,7 @@ def adopt_native_root(state: _TraceState | None, native_name: str | None) -> Non
     """AID-01/AID-04: let a discovered framework root name the trace's agent.
 
     A guessed name (service/entry script/default) yields to the framework root.
-    An explicit ``run("app")`` name is kept as the ``morse.app`` label and the
+    An explicit ``run("app")`` name is kept as the ``amund.app`` label and the
     discovered root keeps the agent identity, so no second agent is forked.
     Idempotent; a no-op under ``AMUND_AGENT_IDENTITY=legacy``.
     """
@@ -828,8 +828,8 @@ def set_prompt(name: str, version: int | str | None = None) -> None:
     20 references are kept per trace.
 
     Wire behaviour. The JSON path carries every distinct reference. The OTLP
-    path carries one reference per span (``morse.prompt.name`` /
-    ``morse.prompt.version``): if several land on the same span, the LAST one
+    path carries one reference per span (``amund.prompt.name`` /
+    ``amund.prompt.version``): if several land on the same span, the LAST one
     wins on that span, and none of them overwrites a different span's.
     No-op (with a debug log) when no trace is open.
     """

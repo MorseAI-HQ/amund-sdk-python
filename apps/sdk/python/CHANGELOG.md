@@ -11,6 +11,43 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ## [Unreleased]
 
+### Changed
+
+- **Span and resource attributes are emitted under `amund.*` (unreleased, Harness² track-only, not
+  published).** Every OTLP attribute the SDK emitted as `morse.<suffix>` is now emitted as
+  `amund.<suffix>` ONLY: no double emission. The server reads `amund.*` first and falls back to
+  `morse.*`, so older SDK versions keep working. `amund.harness.*` is unchanged. The instrumentation
+  scope name (`morse_ai`) and `morse_ai.framework` / `morse_ai.source` inputs are untouched. Export
+  batching is unchanged.
+
+| Old key (`morse.*`)                     | New key (`amund.*`)          |
+| --------------------------------------- | ---------------------------- |
+| `morse.span_type`                       | `amund.span_type`            |
+| `morse.cost_usd`                        | `amund.cost_usd`             |
+| `morse.input_data`                      | `amund.input_data`           |
+| `morse.output_data`                     | `amund.output_data`          |
+| `morse.context_segments`                | `amund.context_segments`     |
+| `morse.metadata.<key>`                  | `amund.metadata.<key>`       |
+| `morse.agent`                           | `amund.agent`                |
+| `morse.agent_version`                   | `amund.agent_version`        |
+| `morse.identity_source`                 | `amund.identity_source`      |
+| `morse.app`                             | `amund.app`                  |
+| `morse.thread_id`                       | `amund.thread_id`            |
+| `morse.user_id`                         | `amund.user_id`              |
+| `morse.user_metadata`                   | `amund.user_metadata`        |
+| `morse.outcome.success`                 | `amund.outcome.success`      |
+| `morse.outcome.label`                   | `amund.outcome.label`        |
+| `morse.record_key.<type>`               | `amund.record_key.<type>`    |
+| `morse.framework`                       | `amund.framework`            |
+| `morse.source`                          | `amund.source`               |
+| `morse.prompt.name`                     | `amund.prompt.name`          |
+| `morse.prompt.version`                  | `amund.prompt.version`       |
+| `morse.prompt.link_source`              | `amund.prompt.link_source`   |
+| `morse.exception_type`                  | `amund.exception_type`       |
+| `morse.error_message`                   | `amund.error_message`        |
+| `morse.sdk.version` (resource)          | `amund.sdk.version`          |
+| `morse.process.service_name` (resource) | `amund.process.service_name` |
+
 ### Added
 
 - **Harness telemetry v1 (H2-C5; unreleased, Harness² track-only, not published).** Optional
@@ -90,7 +127,7 @@ Morse is now Amund. **BREAKING for packaging only; existing code keeps running.*
   its level or handlers by name, rename it. SDK log lines are prefixed `amund:`.
 - Product name in messages and docs is Amund; package URLs point to https://amundai.com,
   https://docs.amundai.com and https://github.com/MorseAI-HQ/amund-sdk-python.
-- **Unchanged on the wire:** span and resource attribute keys (`morse.*`, `morse_ai.framework`,
+- **Unchanged on the wire (at the time of this release; `morse.*` moved to `amund.*` later, see Unreleased):** span and resource attribute keys (`morse.*`, `morse_ai.framework`,
   `morse_ai.source`), the OTel instrumentation scope name (`morse_ai`), diagnostics fingerprints,
   `X-Morse-*` headers, the `morse_ai-python/<version>` User-Agent, the `morse_ai.sdk` default log
   service name, and the default endpoint (see below). Dashboards, alerts and server-side parsing see

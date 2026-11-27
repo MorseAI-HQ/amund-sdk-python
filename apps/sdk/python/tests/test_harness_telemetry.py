@@ -97,7 +97,7 @@ def _root_attrs(eng, trace_id_hex: str) -> dict:
     eng.provider.force_flush()
     tid = int(trace_id_hex, 16)
     spans = [s for s in eng.recorder.spans if s.context.trace_id == tid]
-    root = next(s for s in spans if "morse.agent" in dict(s.attributes))
+    root = next(s for s in spans if "amund.agent" in dict(s.attributes))
     return dict(root.attributes)
 
 
@@ -402,7 +402,7 @@ def test_hostile_objects_never_escape():
 
 
 # ---------------------------------------------------------------------------
-# OTLP: exact keys and types, root span only, no morse.harness.*
+# OTLP: exact keys and types, root span only, no morse.* keys
 # ---------------------------------------------------------------------------
 
 
@@ -439,7 +439,7 @@ def test_otlp_keys_and_types_are_exact(engine):
     assert harness_attrs["amund.harness.channels_incomplete"] is True
     assert harness_attrs["amund.harness.parent_hash"] == B
     assert harness_attrs["amund.harness.run_role"] == "probe"
-    assert not [k for k in attrs if k.startswith("morse.harness")]
+    assert not [k for k in attrs if k.startswith("morse.")]
 
 
 def test_otlp_only_declared_fields_are_emitted(engine):

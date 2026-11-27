@@ -371,7 +371,7 @@ class MorseCallbackHandler(_LCBaseCallbackHandler):
 
         The framework's own root name (graph name, ``run_name``) names the agent
         (or becomes the agent while an explicit ``run("app")`` name turns into
-        the ``morse.app`` label). No extra agent span is emitted for it.
+        the ``amund.app`` label). No extra agent span is emitted for it.
         """
         if identity_legacy() or self._chain_kind(name, kwargs) == "node":
             return False

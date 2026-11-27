@@ -376,9 +376,9 @@ def test_otlp_root_span_carries_morse_app_and_identity_source(engine, monkeypatc
     ]
     root = next(s for s in spans if s.parent is None or s.name == "triage")
     attrs = dict(root.attributes)
-    assert attrs["morse.agent"] == "triage"
-    assert attrs["morse.app"] == "airline-support"
-    assert attrs["morse.identity_source"] == "framework"
+    assert attrs["amund.agent"] == "triage"
+    assert attrs["amund.app"] == "airline-support"
+    assert attrs["amund.identity_source"] == "framework"
 
 
 # --- AID-09 legacy opt-out ------------------------------------------------------

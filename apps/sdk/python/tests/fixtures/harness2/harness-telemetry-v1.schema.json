@@ -95,7 +95,7 @@
       "amund.harness.parent_hash": "string",
       "amund.harness.run_role": "string, production | probe",
       "placement": "resource attributes OR the root agent span; a span-level value overrides the resource value for that trace. dependentRequired is checked on the merged view.",
-      "namespace_note": "amund.harness.* is the founder-specified namespace (2026-11-26). There is NO morse.harness.* alias: nothing ever emitted it, and the 2026-09-21 wire decision rejects dual-accept. Whether the other morse.* attributes move to amund.* is a separate founder decision.",
+      "namespace_note": "amund.harness.* is the founder-specified namespace (2026-11-26). There is NO morse.harness.* alias: nothing ever emitted it, and the 2026-09-21 wire decision rejects dual-accept. As of 2026-11-27 every other morse.* attribute is also emitted as amund.* (same suffix, no double emission); the server reads amund.* first and falls back to morse.* for older SDKs.",
       "invalid_values": "ingest drops the invalid attribute (per item for channels_changed), keeps the span, counts the drop; it never rejects the batch"
     },
     "mcp_declare_change": {
