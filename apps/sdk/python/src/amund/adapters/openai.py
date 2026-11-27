@@ -647,6 +647,63 @@ def _azure_call_slot(resource: Any, kwargs: dict[str, Any]) -> dict[str, Any] | 
         return None
 
 
+# ---------------------------------------------------------------------------
+# MHQ-1944: OpenAI-compatible providers behind the OpenAI client
+# ---------------------------------------------------------------------------
+# Groq, Gemini, OpenRouter, Together ... are called as
+# ``OpenAI(base_url="https://api.groq.com/openai/v1")``. Without this the span
+# claims OpenAI: wrong vendor on the trace page, and a price looked up for the
+# wrong vendor. The provider and host come from the client's ``base_url``; the
+# server applies the same host map to spans from older SDKs.
+
+_COMPAT_HOST_PROVIDERS: dict[str, str] = {
+    "api.groq.com": "groq",
+    "generativelanguage.googleapis.com": "gemini",
+    "openrouter.ai": "openrouter",
+    "api.together.xyz": "together",
+    "api.together.ai": "together",
+    "api.mistral.ai": "mistral",
+    "api.deepseek.com": "deepseek",
+    "api.fireworks.ai": "fireworks",
+    "api.x.ai": "xai",
+    "api.cerebras.ai": "cerebras",
+    "api.perplexity.ai": "perplexity",
+}
+# Hosts that resell other vendors' models at their own rates: the bundled price
+# for the bare model id is not theirs, so the SDK reports no cost and the server
+# prices from a provider-qualified rate, or reports the span unpriced.
+_COMPAT_RESALE_PROVIDERS = frozenset({"groq", "together", "fireworks", "cerebras"})
+
+
+def _compat_provider_for_host(host: str) -> str | None:
+    while host:
+        provider = _COMPAT_HOST_PROVIDERS.get(host)
+        if provider is not None:
+            return provider
+        dot = host.find(".")
+        if dot == -1:
+            return None
+        host = host[dot + 1 :]
+    return None
+
+
+def _compat_provider_facts(resource: Any) -> dict[str, Any] | None:
+    """``{provider, gen_ai.system, server.address}`` for an OpenAI client whose
+    ``base_url`` points at a known OpenAI-compatible provider, else None."""
+    try:
+        client = _openai_client_of(resource)
+        if client is None or _is_azure_client(client):
+            return None
+        host = (urlsplit(str(client.base_url)).hostname or "").lower().rstrip(".")
+        provider = _compat_provider_for_host(host)
+        if provider is None:
+            return None
+        return {"provider": provider, "gen_ai.system": provider, "server.address": host}
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("amund: openai-compatible provider detection swallowed: %s", exc)
+        return None
+
+
 def _note_raw_headers(slot: dict[str, Any] | None, response: Any) -> None:
     """``with_raw_response`` hands back the headers directly (LiteLLM path)."""
     if (
@@ -697,6 +754,7 @@ def _record_llm_span_for_response(
     extra_metadata: dict[str, Any] | None = None,
     azure: dict[str, Any] | None = None,
     span_id: str | None = None,
+    compat: dict[str, Any] | None = None,
 ) -> None:
     state = get_active_trace()
     if state is None:
@@ -708,6 +766,8 @@ def _record_llm_span_for_response(
         if azure is not None:
             model_override, azure_metadata = _azure_model_and_metadata(azure, response)
         telemetry = adapter.extract(response, model=model_override)
+        if compat is not None and compat["provider"] in _COMPAT_RESALE_PROVIDERS:
+            telemetry["cost_usd"] = None
         thread_facts: dict[str, str] = {}
         if api == _RESPONSES:
             thread_facts = _responses_thread_facts(response, kwargs)
@@ -747,6 +807,8 @@ def _record_llm_span_for_response(
         )
         metadata: dict[str, Any] = dict(thread_facts)
         metadata.update(azure_metadata)
+        if compat is not None:
+            metadata.update(compat)
         if telemetry.get("metadata"):
             metadata.update(telemetry["metadata"])
         if extra_metadata:
@@ -953,6 +1015,8 @@ class _CallState:
         self.span_id: str | None = None  # MHQ-1880: pre-minted, set per call
         # MHQ-1741: Azure deployment + served model; None for other clients.
         self.azure = _azure_call_slot(resource, kwargs)
+        # MHQ-1944: Groq, Gemini ... behind OpenAI(base_url=...); None otherwise.
+        self.compat = _compat_provider_facts(resource)
 
     def restart_clock(self) -> None:
         """Start the llm span after the inferred tool spans just closed.
@@ -985,6 +1049,7 @@ class _CallState:
             extra_metadata=extra_metadata,
             azure=self.azure,
             span_id=self.span_id,
+            compat=self.compat,
         )
 
     def record_in_trace(self, response: Any, **kw: Any) -> None:
