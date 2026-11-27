@@ -141,7 +141,7 @@ def json_capped(value: Any, max_bytes: int) -> str | None:
     a raw string if oversized — on the rare oversized-structured-payload
     path this can produce a value that no longer parses as JSON server
     side; the server's tolerant-JSON adapters already drop unparseable
-    blobs as a whole (same behavior as a malformed ``morse.context_segments``
+    blobs as a whole (same behavior as a malformed ``amund.context_segments``
     attribute today), so this is a safety valve against unbounded payload
     growth, not a guarantee of partial preservation.
 
@@ -613,15 +613,15 @@ class _OtelEngine:
             sampler: Sampler = ParentBased(root=self.root_sampler)
             # MHQ-1100: an env-derived service.name must never become agent
             # identity. Pin the OTel default and keep the env value under
-            # ``morse.process.service_name``; the agent travels as the
-            # root-span ``morse.agent`` attribute instead.
+            # ``amund.process.service_name``; the agent travels as the
+            # root-span ``amund.agent`` attribute instead.
             resource_attrs: dict[str, Any] = {"service.name": "unknown_service"}
             # MHQ-1740: framework spans routed through this provider (Strands)
             # carry no Amund scope, so the server reads the SDK release here.
-            resource_attrs["morse.sdk.version"] = __version__
+            resource_attrs["amund.sdk.version"] = __version__
             proc_service = env_service_name()
             if proc_service:
-                resource_attrs["morse.process.service_name"] = proc_service
+                resource_attrs["amund.process.service_name"] = proc_service
             # Deploy markers: the JSON path already sends git.revision; the
             # OTel path (run()/span()/LangGraph) never did, so its traces had none.
             from amund._internal.env import (
@@ -803,7 +803,7 @@ def _span_dict_to_otel_attributes(
 
     span_type = span_dict.get("type")
     if span_type:
-        attrs["morse.span_type"] = span_type
+        attrs["amund.span_type"] = span_type
 
     model = span_dict.get("model")
     if model is not None:
@@ -822,32 +822,32 @@ def _span_dict_to_otel_attributes(
 
     cost_usd = span_dict.get("cost_usd")
     if cost_usd is not None:
-        # morse.cost_usd: direct SDK/adapter-computed cost (pricing-table based)
+        # amund.cost_usd: direct SDK/adapter-computed cost (pricing-table based)
         # — distinct from gen_ai.usage.cost (provider-billing-reported,
         # feeds the separate `provider_reported` cost-engine tier server
         # side). Stringify to preserve precision across the wire.
-        attrs["morse.cost_usd"] = str(cost_usd)
+        attrs["amund.cost_usd"] = str(cost_usd)
 
     input_data = span_dict.get("input_data")
     if input_data is not None:
         encoded = json_capped(input_data, max_field_bytes)
         if encoded is not None:
-            attrs["morse.input_data"] = encoded
+            attrs["amund.input_data"] = encoded
 
     output_data = span_dict.get("output_data")
     if output_data is not None:
         encoded = json_capped(output_data, max_field_bytes)
         if encoded is not None:
-            attrs["morse.output_data"] = encoded
+            attrs["amund.output_data"] = encoded
 
     context_segments = span_dict.get("context_segments")
     if context_segments is not None:
         encoded = json_capped(context_segments, max_field_bytes)
         if encoded is not None:
-            attrs["morse.context_segments"] = encoded
+            attrs["amund.context_segments"] = encoded
 
     # Arbitrary custom metadata (SpanData.metadata / set_metadata()). Each
-    # top-level key is namespaced under `morse.metadata.<key>` so the server's
+    # top-level key is namespaced under `amund.metadata.<key>` so the server's
     # OTLP translation layer can pop + un-prefix + JSON-decode them back
     # into a clean metadata dict (apps/api/apps/traces/adapters/otlp.py) —
     # without that unwrap step these would otherwise ALSO show up verbatim
@@ -859,46 +859,46 @@ def _span_dict_to_otel_attributes(
         for key, value in metadata.items():
             encoded = json_capped(value, max_field_bytes)
             if encoded is not None:
-                attrs[f"morse.metadata.{key}"] = encoded
+                attrs[f"amund.metadata.{key}"] = encoded
 
     error_message = span_dict.get("error_message")
     # Trace-level fields only travel on the root span.
     if is_root:
         agent = trace_dict.get("agent")
         if agent:
-            attrs["morse.agent"] = str(agent)
+            attrs["amund.agent"] = str(agent)
         # AID-01/04: how the agent was named, and the run("app") label.
         trace_md = trace_dict.get("metadata") or {}
         if trace_md.get("identity_source"):
-            attrs["morse.identity_source"] = str(trace_md["identity_source"])
+            attrs["amund.identity_source"] = str(trace_md["identity_source"])
         if trace_md.get("morse_app"):
-            attrs["morse.app"] = str(trace_md["morse_app"])
+            attrs["amund.app"] = str(trace_md["morse_app"])
         thread_id = trace_dict.get("thread_id")
         if thread_id is not None:
-            attrs["morse.thread_id"] = str(thread_id)
+            attrs["amund.thread_id"] = str(thread_id)
         user_id = trace_dict.get("user_id")
         if user_id is not None:
-            attrs["morse.user_id"] = str(user_id)
+            attrs["amund.user_id"] = str(user_id)
         user_metadata = trace_dict.get("user_metadata")
         if user_metadata:
-            attrs["morse.user_metadata"] = json.dumps(
+            attrs["amund.user_metadata"] = json.dumps(
                 {k: str(v) for k, v in user_metadata.items()}
             )
         success = trace_dict.get("success")
         if success is not None:
-            attrs["morse.outcome.success"] = bool(success)
+            attrs["amund.outcome.success"] = bool(success)
         outcome = trace_dict.get("outcome")
         if outcome is not None:
-            attrs["morse.outcome.label"] = str(outcome)
+            attrs["amund.outcome.label"] = str(outcome)
         # ATTR-01/04: record keys and the declared agent version ride the root
         # span; the server reads the first value it sees.
         record_keys = trace_dict.get("record_keys")
         if record_keys:
             for key_type, key_value in record_keys.items():
-                attrs[f"morse.record_key.{key_type}"] = str(key_value)
+                attrs[f"amund.record_key.{key_type}"] = str(key_value)
         agent_version = trace_dict.get("agent_version")
         if agent_version:
-            attrs["morse.agent_version"] = str(agent_version)
+            attrs["amund.agent_version"] = str(agent_version)
         # H2-C5 harness-telemetry v1: exact ``amund.harness.*`` keys, root
         # span only, each present only when the (already validated) trace
         # field is. No ``morse.harness.*`` alias exists by contract.
@@ -922,29 +922,29 @@ def _span_dict_to_otel_attributes(
             attrs["amund.harness.run_role"] = str(harness_role)
         framework = resource_dict.get("morse_ai.framework")
         if framework:
-            attrs["morse.framework"] = framework
+            attrs["amund.framework"] = framework
         source = resource_dict.get("morse_ai.source")
         if source:
-            attrs["morse.source"] = source
+            attrs["amund.source"] = source
 
     # ATTR-04: a prompt reference lives on the span set_prompt() was called in
     # (the root span when it was called outside a span).
     if prompt_ref:
-        attrs["morse.prompt.name"] = str(prompt_ref["name"])
+        attrs["amund.prompt.name"] = str(prompt_ref["name"])
         if prompt_ref.get("version") is not None:
-            attrs["morse.prompt.version"] = int(prompt_ref["version"])
+            attrs["amund.prompt.version"] = int(prompt_ref["version"])
         if prompt_ref.get("link_source") == "fetch":
-            attrs["morse.prompt.link_source"] = "fetch"
+            attrs["amund.prompt.link_source"] = "fetch"
 
     exception_type = span_dict.get("exception_type")
     if exception_type and span_dict.get("status") == "failed":
-        attrs["morse.exception_type"] = str(exception_type)
+        attrs["amund.exception_type"] = str(exception_type)
 
     if error_message and span_dict.get("status") == "failed":
         # Also carried as a plain attribute so status.message-agnostic
         # consumers (and the golden-corpus test) can read it without
         # round-tripping through OTel's Status object.
-        attrs["morse.error_message"] = str(error_message)
+        attrs["amund.error_message"] = str(error_message)
 
     return attrs
 
@@ -956,7 +956,7 @@ def _prompt_refs_by_span(
 ) -> dict[str, dict[str, Any]]:
     """Map span id -> the one prompt reference that span carries on OTLP.
 
-    A span has a single ``morse.prompt.name`` / ``.version`` pair, so when
+    A span has a single ``amund.prompt.name`` / ``.version`` pair, so when
     several references were set on the same span the LAST one wins (the JSON
     path keeps them all). A reference with no ``span_id``, or whose span was
     never emitted, goes on the root span and competes there in call order

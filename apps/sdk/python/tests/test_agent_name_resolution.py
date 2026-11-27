@@ -65,10 +65,10 @@ def test_run_agent_wins_over_process_service_name(monkeypatch, engine):
     with amund.run("copilot") as r:
         trace_id = r.trace_id
     root = _root(eng, trace_id)
-    assert root.attributes["morse.agent"] == "copilot"
+    assert root.attributes["amund.agent"] == "copilot"
     res = dict(root.resource.attributes)
     assert res.get("service.name") != "proc"
-    assert res["morse.process.service_name"] == "proc"
+    assert res["amund.process.service_name"] == "proc"
 
 
 def test_no_env_service_name_leaves_no_process_attr(engine):
@@ -76,7 +76,7 @@ def test_no_env_service_name_leaves_no_process_attr(engine):
     with amund.run("copilot") as r:
         trace_id = r.trace_id
     root = _root(eng, trace_id)
-    assert "morse.process.service_name" not in dict(root.resource.attributes)
+    assert "amund.process.service_name" not in dict(root.resource.attributes)
 
 
 def test_resource_attributes_service_name_is_demoted(monkeypatch, engine):
@@ -86,7 +86,7 @@ def test_resource_attributes_service_name_is_demoted(monkeypatch, engine):
         trace_id = r.trace_id
     res = dict(_root(eng, trace_id).resource.attributes)
     assert res.get("service.name") != "viaattrs"
-    assert res["morse.process.service_name"] == "viaattrs"
+    assert res["amund.process.service_name"] == "viaattrs"
 
 
 # --- resolver tiers -------------------------------------------------------

@@ -28,7 +28,7 @@ Also:
   record the same call a second time (Strands' ``OpenAIModel``,
   ``GeminiModel``, LiteLLM's OpenAI provider).
 - Multi-agent spans (``invoke_swarm`` / ``invoke_graph``) are stamped
-  ``morse.span_type=agent``. Without it the server types any span carrying a
+  ``amund.span_type=agent``. Without it the server types any span carrying a
   ``gen_ai.*`` attribute as ``llm``, which would show the swarm as an LLM call
   with no model.
 - A Strands trace is separate from any open ``amund.run()`` trace (the Amund
@@ -251,7 +251,7 @@ def _wrap_start_multiagent(original: Any) -> Any:
     def start_multiagent_span(self: Any, *args: Any, **kwargs: Any) -> Any:
         span = original(self, *args, **kwargs)
         try:
-            span.set_attribute("morse.span_type", "agent")
+            span.set_attribute("amund.span_type", "agent")
         except Exception as exc:  # noqa: BLE001
             logger.debug("amund: strands multi-agent span typing failed: %s", exc)
         return span

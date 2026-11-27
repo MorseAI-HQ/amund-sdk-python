@@ -284,7 +284,7 @@ class TestTraceAgent:
 
     @pytest.mark.req("MHQ-1157")
     def test_decorator_emits_no_outcome_attribute_on_the_wire(self):
-        """What the server keys provenance on: morse.outcome.success."""
+        """What the server keys provenance on: amund.outcome.success."""
         from amund.otel_provider import _span_dict_to_otel_attributes
         from amund.tracing import _get_last_trace, run, trace_agent
 
@@ -301,8 +301,8 @@ class TestTraceAgent:
             is_root=True,
             max_field_bytes=65536,
         )
-        assert "morse.outcome.success" not in attrs
-        assert "morse.outcome.label" not in attrs
+        assert "amund.outcome.success" not in attrs
+        assert "amund.outcome.label" not in attrs
 
         # Contrast: an explicit outcome via amund.run still declares it.
         with run("my-agent") as r:
@@ -315,8 +315,8 @@ class TestTraceAgent:
             is_root=True,
             max_field_bytes=65536,
         )
-        assert attrs["morse.outcome.success"] is True
-        assert attrs["morse.outcome.label"] == "qualified"
+        assert attrs["amund.outcome.success"] is True
+        assert attrs["amund.outcome.label"] == "qualified"
 
 
 class TestRunContextManager:

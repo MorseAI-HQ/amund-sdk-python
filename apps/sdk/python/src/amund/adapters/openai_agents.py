@@ -874,7 +874,7 @@ def _prepare_call(
     else:
         # AID-04: ``run("app")`` around this app must not fork a second agent:
         # the starting agent keeps the identity and the run name becomes the
-        # ``morse.app`` label. Only the outermost run adopts (idempotent).
+        # ``amund.app`` label. Only the outermost run adopts (idempotent).
         adopt_native_root(state, getattr(starting_agent, "name", None))
         # The active trace's top-of-stack span is the run's root agent span.
         root_span = state.span_stack[-1] if state.span_stack else None

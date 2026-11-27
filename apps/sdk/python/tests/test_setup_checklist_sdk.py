@@ -168,8 +168,8 @@ def test_thread_facts_reach_the_otlp_wire_attributes():
     attrs = _span_dict_to_otel_attributes(
         _llm_span(), _trace(), {}, is_root=False, max_field_bytes=65536
     )
-    assert attrs["morse.metadata.response_id"] == '"r2"'
-    assert attrs["morse.metadata.previous_response_id"] == '"r1"'
+    assert attrs["amund.metadata.response_id"] == '"r2"'
+    assert attrs["amund.metadata.previous_response_id"] == '"r1"'
 
 
 @pytest.mark.req("SETUP-10")

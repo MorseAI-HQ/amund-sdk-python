@@ -2,7 +2,7 @@
 
 Ingest treats a real ``service.name`` as the agent name, so the SDK must NOT
 let a process-level ``OTEL_SERVICE_NAME`` silently become identity. Instead
-every trace carries ``morse.agent`` on its root span, resolved here.
+every trace carries ``amund.agent`` on its root span, resolved here.
 
 First non-empty wins:
   1. explicit name from customer code (``run("x")``, ``agent_name=...``)

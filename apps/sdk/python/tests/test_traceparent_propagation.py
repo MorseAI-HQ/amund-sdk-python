@@ -64,7 +64,7 @@ def _exported_llm_spans(engine, trace_id: str) -> list[Any]:
         s
         for s in engine.recorder.spans
         if s.context.trace_id == int(trace_id, 16)
-        and s.attributes.get("morse.span_type") == "llm"
+        and s.attributes.get("amund.span_type") == "llm"
     ]
 
 
