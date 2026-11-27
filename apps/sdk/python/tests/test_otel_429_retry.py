@@ -18,6 +18,7 @@ Amund's `export` override both run for real.
 from __future__ import annotations
 
 import time
+from importlib.metadata import version
 
 import pytest
 from opentelemetry.sdk.trace import ReadableSpan
@@ -27,6 +28,11 @@ from opentelemetry.trace import SpanContext, TraceFlags
 from amund import otel_provider
 from amund._internal import diagnostics
 from tests import _otlp_stub
+
+# opentelemetry-exporter-otlp-proto-http 1.45 started retrying 429 itself.
+_STOCK_RETRIES_429 = tuple(
+    int(p) for p in version("opentelemetry-exporter-otlp-proto-http").split(".")[:2]
+) >= (1, 45)
 
 
 @pytest.fixture(autouse=True)
@@ -164,7 +170,13 @@ def test_a_zero_retry_after_retries_rather_than_dropping(_no_real_sleeping):
 
     assert result is SpanExportResult.SUCCESS
     assert len(exporter._calls) == 2, "a 0 must not end the retry loop"
-    assert _no_real_sleeping == [1.0], "falls back to backoff, does not busy-loop"
+    # On otel 1.45+ the stock client may retry the 429 itself before its
+    # (tiny) timeout runs out, so whether our loop waits at all is timing.
+    # What must hold either way: if it waits, it backs off rather than
+    # busy-looping on the 0.
+    assert _no_real_sleeping in ([1.0], []), "falls back to backoff"
+    if not _STOCK_RETRIES_429:
+        assert _no_real_sleeping == [1.0]
     assert diagnostics._drain_counters() == []
 
 
