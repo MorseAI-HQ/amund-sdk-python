@@ -11,6 +11,21 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ## [Unreleased]
 
+### Added
+
+- **Harness telemetry v1 (H2-C5; unreleased, Harness² track-only, not published).** Optional
+  `harness_hash`, `harness_version`, `harness_channels_changed`, `harness_channels_incomplete`,
+  `harness_parent_hash` and `harness_run_role` keyword arguments on `amund.init()` (default for every
+  trace) and `amund.run()` (overrides per field). They are validated locally and never raise: an invalid
+  value is dropped with one debug log line; unknown items in `harness_channels_changed` are dropped
+  individually, duplicates collapse and `harness_channels_incomplete` is set; fields that need a hash are
+  dropped without a valid `harness_hash`. They ride the root span as `amund.harness.hash`, `.version`,
+  `.channels_changed` (string array), `.channels_incomplete`, `.parent_hash` and `.run_role`, and as the
+  same snake_case names on the JSON trace payload. Omitted fields add nothing. New
+  `amund.compute_harness_hash(paths, root=None)` returns the `file_set_hash` of files and directories
+  (raw bytes, root-relative NFC forward-slash paths, sorted by UTF-8 bytes). Contract:
+  `harness-telemetry-v1.schema.json`, vendored in `tests/fixtures/harness2/`.
+
 ### Fixed
 
 - **A tool wrapped in `span(name, "tool")` is no longer recorded twice under `wrap()`**

@@ -45,6 +45,7 @@ from typing import Any
 
 from amund._internal import auto_detect, env
 from amund._internal.errors import absorb_errors
+from amund._internal.harness import compute_harness_hash
 from amund._internal.redaction import RedactionConfig
 from amund._version import __version__
 from amund.client import _Client
@@ -63,6 +64,7 @@ from amund.propagation import extract_traceparent, inject_traceparent
 from amund.record import RunRecord
 from amund.tracing import (
     _set_agent_version,
+    _set_harness_defaults,
     _set_redaction_config,
     _set_service_version,
     _set_source,
@@ -79,6 +81,7 @@ from amund.tracing import (
 logger = logging.getLogger("amund")
 
 __all__ = [
+    "compute_harness_hash",
     # V2 module-level public API
     "init",
     "track",
@@ -167,6 +170,7 @@ def _build_client(
     source: str | None = None,
     agent_version: str | None = None,
     capture_end_user: bool = False,
+    harness_kwargs: dict[str, Any] | None = None,
 ) -> _Client:
     """Construct a fresh `_Client` from explicit args + env-var fallbacks.
 
@@ -193,6 +197,7 @@ def _build_client(
         "agent_version": agent_version,
         "service_version": env.get_service_version(),
         "capture_end_user": capture_end_user,
+        **(harness_kwargs or {}),
     }
     if resolved_endpoint is None:
         return _Client(**common_kwargs)
@@ -249,6 +254,12 @@ def init(
     agent_version: str | None = None,
     capture_end_user: bool = False,
     propagate_trace_context: bool = True,
+    harness_hash: str | None = None,
+    harness_version: str | None = None,
+    harness_channels_changed: list[str] | None = None,
+    harness_channels_incomplete: bool | None = None,
+    harness_parent_hash: str | None = None,
+    harness_run_role: str | None = None,
 ) -> None:
     """Initialize the Amund SDK singleton.
 
@@ -304,6 +315,14 @@ def init(
             trace as the default; a per-run ``run(..., agent_version=)``
             overrides it. Amund also detects the git revision on its own
             (override with ``AMUND_GIT_REVISION``).
+        harness_hash, harness_version, harness_channels_changed,
+        harness_channels_incomplete, harness_parent_hash, harness_run_role:
+            (Unreleased, harness-telemetry v1.) Optional identity of the
+            harness (prompts, skills, guardrails, ...) the agent runs under,
+            sent on every trace as the default; the same keyword arguments on
+            ``run()`` override them field by field. Invalid values are dropped
+            with a debug log, never raised. Omitted fields cost nothing. See
+            :func:`compute_harness_hash`.
         capture_end_user: Opt-in, default False. When True, the OpenAI
             (``user`` / ``safety_identifier``) and Anthropic
             (``metadata.user_id``) adapters read the end-user value from each
@@ -347,6 +366,14 @@ def init(
         source=source,
         agent_version=agent_version,
         capture_end_user=capture_end_user,
+        harness_kwargs={
+            "harness_hash": harness_hash,
+            "harness_version": harness_version,
+            "harness_channels_changed": harness_channels_changed,
+            "harness_channels_incomplete": harness_channels_incomplete,
+            "harness_parent_hash": harness_parent_hash,
+            "harness_run_role": harness_run_role,
+        },
     )
 
 
@@ -362,6 +389,7 @@ def _init_impl(
     source: str | None = None,
     agent_version: str | None = None,
     capture_end_user: bool = False,
+    harness_kwargs: dict[str, Any] | None = None,
 ) -> None:
     """Inner init body — wrapped with absorb_errors so non-config failures
     (network, transport startup) don't crash the host app at boot."""
@@ -389,6 +417,7 @@ def _init_impl(
             source=source,
             agent_version=agent_version,
             capture_end_user=capture_end_user,
+            harness_kwargs=harness_kwargs,
         )
         _log_destination_url(_client)
         auto_detect.install_adapters()
@@ -807,6 +836,7 @@ def _reset_for_testing() -> None:
     _set_redaction_config(None)
     _set_source(None)
     _set_agent_version(None)
+    _set_harness_defaults()
     _set_service_version(None)
     # Defer import to avoid a circular at module load.
     from amund._internal import diagnostics
