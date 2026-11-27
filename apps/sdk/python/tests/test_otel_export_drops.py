@@ -8,16 +8,14 @@ and a healthy one were indistinguishable from both sides.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
-import requests
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.trace import SpanContext, TraceFlags
 
 from amund import otel_provider
 from amund._internal import diagnostics
+from tests._otlp_stub import script_exporter
 
 
 @pytest.fixture(autouse=True)
@@ -62,9 +60,9 @@ def _one_span() -> ReadableSpan:
 def _exporter(status: int | None):
     """An exporter whose every HTTP attempt answers ``status``.
 
-    The stub goes in at the *session* — not at ``_export`` — because
-    ``_export`` is the override under test; shadowing it on the instance would
-    leave the test asserting against stock behaviour.
+    The stub is a transport adapter on the exporter's session (see
+    ``tests/_otlp_stub.py``), below both the stock exporter and Amund's status
+    recording, so this runs the real code on every supported otel version.
 
     ``timeout`` is deliberately tiny so the stock retry loop hits its deadline
     on the first backoff instead of sleeping through six attempts.
@@ -74,15 +72,7 @@ def _exporter(status: int | None):
         headers={"Authorization": "Bearer test"},
         timeout=0.001,
     )
-
-    def _fake_post(**_kwargs):
-        if status is None:
-            raise requests.exceptions.ConnectionError("no route to host")
-        return SimpleNamespace(
-            status_code=status, ok=200 <= status < 300, reason="stub", text=""
-        )
-
-    exporter._session = SimpleNamespace(post=_fake_post, close=lambda: None)
+    script_exporter(exporter, [None if status is None else (status, {})])
     return exporter
 
 

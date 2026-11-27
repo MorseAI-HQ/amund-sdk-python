@@ -13,6 +13,15 @@ because they are released in lockstep. Expect the numbers to diverge.
 
 ### Fixed
 
+- **A rejected key is named again on OpenTelemetry 1.45+** (MHQ-1922). With
+  `opentelemetry-exporter-otlp-proto-http` 1.45, a 401/403 from the OTLP endpoint was reported as
+  `dropped N span (send_failed) — could not reach the Amund API`, because the SDK read the HTTP
+  status from the exporter's private `_export()`, which 1.45 no longer calls. The status is now
+  read from the `requests` session the SDK hands the exporter, which every supported version
+  (1.27 and later) sends through. A rejected key prints `Amund rejected the API key (401)…` on
+  1.44 and 1.45; a refused connection still says "could not reach the Amund API". On the oldest
+  supported exporters (1.27), where a refused connection escaped `export()` and the batch was
+  lost uncounted, the drop is now counted and reported too.
 - **A tool wrapped in `span(name, "tool")` is no longer recorded twice under `wrap()`**
   (MHQ-1928). The OpenAI and Google GenAI raw-client adapters infer a `tool` span for every
   tool call they see answered. When the app also opens its own tool span for that call, the

@@ -18,7 +18,6 @@ MHQ-1921:
 from __future__ import annotations
 
 import logging
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -26,6 +25,7 @@ import pytest
 import amund
 from amund import otel_provider, tracing
 from amund._internal import diagnostics
+from tests._otlp_stub import script_exporter
 
 httpx = pytest.importorskip("httpx")
 
@@ -114,19 +114,14 @@ def test_network_failure_keeps_unreachable_wording(caplog, reason):
     assert "rejected the API key" not in warning
 
 
-def _otlp_exporter(status: int) -> Any:
+def _otlp_exporter(status: int | None) -> Any:
+    """Real exporter; every HTTP attempt answers ``status`` (None: refused)."""
     exporter = otel_provider._DropReportingOTLPSpanExporter(
         endpoint="http://localhost:1/api/v1/otlp/v1/traces",
         headers={"Authorization": "Bearer test"},
         timeout=0.001,
     )
-
-    def _fake_post(**_kwargs: Any) -> Any:
-        return SimpleNamespace(
-            status_code=status, ok=False, reason="stub", text="", headers={}
-        )
-
-    exporter._session = SimpleNamespace(post=_fake_post, close=lambda: None)
+    script_exporter(exporter, [None if status is None else (status, {})])
     return exporter
 
 
@@ -159,15 +154,8 @@ def test_otlp_export_rejected_key_says_rejected(caplog, status):
 
 
 @pytest.mark.req("MHQ-1922")
-def test_otlp_export_connection_refused_says_unreachable(caplog, monkeypatch):
-    import requests
-
-    exporter = _otlp_exporter(200)
-
-    def _refuse(**_kwargs: Any) -> Any:
-        raise requests.exceptions.ConnectionError("refused")
-
-    exporter._session = SimpleNamespace(post=_refuse, close=lambda: None)
+def test_otlp_export_connection_refused_says_unreachable(caplog):
+    exporter = _otlp_exporter(None)
     with caplog.at_level(logging.WARNING, logger="amund"):
         exporter.export([_readable_span()])
     text = " ".join(_warnings(caplog))
