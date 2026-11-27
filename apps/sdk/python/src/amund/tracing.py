@@ -57,6 +57,7 @@ from amund._internal.attribution import (
     clean_prompt_ref,
 )
 from amund._internal.errors import absorb_errors
+from amund._internal.harness import clean_harness_layer, merge_harness
 from amund._internal.redaction import DISABLED_CONFIG, RedactionConfig
 from amund.spans import SpanData, SpanType
 
@@ -125,6 +126,10 @@ class _TraceState:
     record_keys: dict[str, str] = field(default_factory=dict)
     agent_version: str | None = None
     prompts: list[dict[str, Any]] = field(default_factory=list)
+    # H2-C5: validated per-run harness-telemetry fields (already cleaned by
+    # ``clean_harness_layer``); ``None`` when the run declared none, so the
+    # common path carries no extra state.
+    harness: dict[str, Any] | None = None
     # AID-01/04: which ladder tier named the root agent, the ``run("app")`` label
     # when a discovered framework root took the agent name (AID-04), and whether
     # a framework root has already been adopted for this trace.
@@ -241,6 +246,10 @@ _git_revision: str | None = None
 # Declared agent version from ``init(agent_version=)``: the default for every
 # trace. A per-run ``run(..., agent_version=)`` overrides it.
 _agent_version: str | None = None
+
+# H2-C5: harness-telemetry defaults from ``init(harness_*=)``, already cleaned.
+# A per-run ``run(..., harness_*=)`` overrides them field by field.
+_harness_defaults: dict[str, Any] | None = None
 
 # SETUP-10: ``init(capture_end_user=True)`` opt-in. Off by default: adapters
 # never read the provider's ``user`` / ``metadata.user_id`` unless this is set.
@@ -376,6 +385,20 @@ def _set_agent_version(value: str | None) -> None:
     """Inject the init-time default agent version. Called by `_Client.__init__`."""
     global _agent_version
     _agent_version = clean_agent_version(value)
+
+
+def _set_harness_defaults(**fields: Any) -> None:
+    """Inject the init-time harness defaults. Called by `_Client.__init__`.
+
+    Stores nothing (``None``) when no field was declared.
+    """
+    global _harness_defaults
+    cleaned = (
+        clean_harness_layer(**fields)
+        if any(v is not None for v in fields.values())
+        else {}
+    )
+    _harness_defaults = cleaned or None
 
 
 def _set_capture_end_user(value: bool) -> None:
@@ -608,6 +631,11 @@ def _build_trace_dict(
         trace_fields["agent_version"] = effective_agent_version
     if getattr(state, "prompts", None):
         trace_fields["prompts"] = [dict(p) for p in state.prompts]
+    # H2-C5: omitted entirely when nothing was declared (zero overhead and a
+    # byte-identical payload for callers that never opt in).
+    run_harness = getattr(state, "harness", None)
+    if run_harness or _harness_defaults:
+        trace_fields.update(merge_harness(_harness_defaults, run_harness))
     # AID-01/04 wire keys the server reads from trace metadata.
     if not identity_legacy():
         identity_md = {
@@ -976,6 +1004,12 @@ class TracedRun:
         user_metadata: dict[str, str] | None = None,
         record_keys: dict[str, str | int] | None = None,
         agent_version: str | None = None,
+        harness_hash: str | None = None,
+        harness_version: str | None = None,
+        harness_channels_changed: list[str] | None = None,
+        harness_channels_incomplete: bool | None = None,
+        harness_parent_hash: str | None = None,
+        harness_run_role: str | None = None,
     ) -> None:
         # MHQ-1100: None/empty resolves via convention at trace start.
         self._agent_name, self._identity_source = resolve_agent_identity(agent_name)
@@ -989,6 +1023,20 @@ class TracedRun:
         self._user_metadata = user_metadata
         self._record_keys = record_keys
         self._agent_version = agent_version
+        # H2-C5: validated now (never raises); ``None`` when nothing was passed.
+        harness_args = {
+            "harness_hash": harness_hash,
+            "harness_version": harness_version,
+            "harness_channels_changed": harness_channels_changed,
+            "harness_channels_incomplete": harness_channels_incomplete,
+            "harness_parent_hash": harness_parent_hash,
+            "harness_run_role": harness_run_role,
+        }
+        self._harness: dict[str, Any] | None = (
+            (clean_harness_layer(**harness_args) or None)
+            if any(v is not None for v in harness_args.values())
+            else None
+        )
         self._success: bool | None = None
         self._outcome: str | None = None
         self._error: str | None = None
@@ -1049,6 +1097,7 @@ class TracedRun:
                 for key_type, key_value in dict(self._record_keys).items():
                     add_record_key(state.record_keys, key_type, key_value)
             state.agent_version = clean_agent_version(self._agent_version)
+            state.harness = self._harness
         except Exception as exc:  # noqa: BLE001
             logger.debug("amund: run() attribution swallowed error: %s", exc)
             _report(exc, "morse_ai.tracing.run.attribution")
@@ -1177,6 +1226,12 @@ def run(
     user_metadata: dict[str, str] | None = None,
     record_keys: dict[str, str | int] | None = None,
     agent_version: str | None = None,
+    harness_hash: str | None = None,
+    harness_version: str | None = None,
+    harness_channels_changed: list[str] | None = None,
+    harness_channels_incomplete: bool | None = None,
+    harness_parent_hash: str | None = None,
+    harness_run_role: str | None = None,
 ) -> TracedRun:
     """Create a TracedRun context manager for explicit trace control.
 
@@ -1210,6 +1265,18 @@ def run(
         agent_version: Your own label for the deployed agent version (max 128
             chars). Overrides the ``init(agent_version=)`` default for this
             trace.
+        harness_hash: (Unreleased, harness-telemetry v1.) SHA-256 (64
+            lowercase hex) of the harness this run executed under; see
+            :func:`amund.compute_harness_hash`. Overrides the ``init()``
+            default. Invalid values are dropped, never raised.
+        harness_version: Display label for the harness (1..128 chars).
+        harness_channels_changed: Channels that differ from the parent
+            harness: any of ``prompt, skill, guardrail, memory,
+            tool_guidance, script, subagent, plugin``. Unknown items are
+            dropped (and ``harness_channels_incomplete`` set); needs a hash.
+        harness_channels_incomplete: ``True`` when the list is a lower bound.
+        harness_parent_hash: ``harness_hash`` this harness derives from.
+        harness_run_role: ``"production"`` (default) or ``"probe"``.
 
     Example (multi-turn agent with thread attribution):
         with amund.run(
@@ -1229,6 +1296,12 @@ def run(
         user_metadata=user_metadata,
         record_keys=record_keys,
         agent_version=agent_version,
+        harness_hash=harness_hash,
+        harness_version=harness_version,
+        harness_channels_changed=harness_channels_changed,
+        harness_channels_incomplete=harness_channels_incomplete,
+        harness_parent_hash=harness_parent_hash,
+        harness_run_role=harness_run_role,
     )
 
 

@@ -24,6 +24,7 @@ from amund.tracing import (
     _set_agent_version,
     _set_capture_end_user,
     _set_git_revision,
+    _set_harness_defaults,
     _set_redaction_config,
     _set_service_version,
     _set_source,
@@ -110,6 +111,12 @@ class _Client:
         agent_version: str | None = None,
         service_version: str | None = None,
         capture_end_user: bool = False,
+        harness_hash: str | None = None,
+        harness_version: str | None = None,
+        harness_channels_changed: list[str] | None = None,
+        harness_channels_incomplete: bool | None = None,
+        harness_parent_hash: str | None = None,
+        harness_run_role: str | None = None,
     ) -> None:
         self._api_key = api_key
         self._endpoint = endpoint
@@ -139,6 +146,14 @@ class _Client:
         _set_source(self._source)
         _set_git_revision(self._git_revision)
         _set_agent_version(agent_version)
+        _set_harness_defaults(
+            harness_hash=harness_hash,
+            harness_version=harness_version,
+            harness_channels_changed=harness_channels_changed,
+            harness_channels_incomplete=harness_channels_incomplete,
+            harness_parent_hash=harness_parent_hash,
+            harness_run_role=harness_run_role,
+        )
         _set_capture_end_user(capture_end_user)
         _set_service_version(service_version)
 

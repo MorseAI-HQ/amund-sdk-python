@@ -855,6 +855,27 @@ def _span_dict_to_otel_attributes(
         agent_version = trace_dict.get("agent_version")
         if agent_version:
             attrs["morse.agent_version"] = str(agent_version)
+        # H2-C5 harness-telemetry v1: exact ``amund.harness.*`` keys, root
+        # span only, each present only when the (already validated) trace
+        # field is. No ``morse.harness.*`` alias exists by contract.
+        harness_hash = trace_dict.get("harness_hash")
+        if harness_hash:
+            attrs["amund.harness.hash"] = str(harness_hash)
+        harness_version = trace_dict.get("harness_version")
+        if harness_version:
+            attrs["amund.harness.version"] = str(harness_version)
+        harness_channels = trace_dict.get("harness_channels_changed")
+        if harness_channels is not None:
+            attrs["amund.harness.channels_changed"] = [str(c) for c in harness_channels]
+        harness_incomplete = trace_dict.get("harness_channels_incomplete")
+        if harness_incomplete is not None:
+            attrs["amund.harness.channels_incomplete"] = bool(harness_incomplete)
+        harness_parent = trace_dict.get("harness_parent_hash")
+        if harness_parent:
+            attrs["amund.harness.parent_hash"] = str(harness_parent)
+        harness_role = trace_dict.get("harness_run_role")
+        if harness_role:
+            attrs["amund.harness.run_role"] = str(harness_role)
         framework = resource_dict.get("morse_ai.framework")
         if framework:
             attrs["morse.framework"] = framework
